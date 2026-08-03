@@ -802,6 +802,7 @@ const SensorSystem = (() => {
     lastRunPeakTime: 0,
     debugRaw: { alpha: null, beta: null, gamma: null, compass: null }, // デバッグ表示用の生センサー値
     debugLastCalibrateYawDeg: null,
+    hasReceivedOrientation: false, // 実際のセンサー値を一度でも受信したか
   };
 
   // 低域通過フィルタ推定値(重力方向・姿勢のベースライン)
@@ -842,6 +843,7 @@ const SensorSystem = (() => {
     state.debugRaw.beta = event.beta;
     state.debugRaw.gamma = event.gamma;
     state.debugRaw.compass = hasCompass ? event.webkitCompassHeading : null;
+    state.hasReceivedOrientation = true;
 
     currentDeviceQuaternion = computeDeviceQuaternion(event);
 
@@ -925,9 +927,26 @@ const SensorSystem = (() => {
     updateDerivedState(currentDeviceQuaternion);
   }
 
+  // 実際のセンサー値が最低1回届くまで待つ(ゲーム開始時、初期値のまま校正してしまうのを防ぐ)
+  function waitForFirstOrientation(timeoutMs = 800) {
+    return new Promise((resolve) => {
+      if (state.hasReceivedOrientation) { resolve(); return; }
+      const startTime = performance.now();
+      const check = () => {
+        if (state.hasReceivedOrientation || performance.now() - startTime > timeoutMs) {
+          resolve();
+        } else {
+          requestAnimationFrame(check);
+        }
+      };
+      check();
+    });
+  }
+
   return {
     state,
     requestPermission,
+    waitForFirstOrientation,
     calibrate,
   };
 })();
@@ -2925,7 +2944,9 @@ const AllyManager = (() => {
     }
     updateEnemyCountHud();
 
-    // 開始時の向きを正面として校正
+    // 開始時の向きを正面として校正(実際のセンサー値が届くまで待ってから校正する。
+    // 許可直後は値がまだ届いておらず、初期値のまま校正してしまうバグの対策)
+    await SensorSystem.waitForFirstOrientation();
     SensorSystem.calibrate();
 
     startTime = performance.now();
