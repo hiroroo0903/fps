@@ -251,6 +251,21 @@ html, body {
 .recenter-icon { font-size: 1.3rem; }
 .recenter-label { font-size: 0.55rem; letter-spacing: 0.05rem; margin-top: 0.1rem; }
 
+.strafe-button {
+  position: absolute; bottom: 1.2rem;
+  width: 3.2rem; height: 3.2rem;
+  border-radius: 50%;
+  background: rgba(219, 228, 214, 0.12);
+  border: 2px solid var(--text-dim);
+  color: var(--text-main);
+  font-size: 1.2rem;
+  display: flex; align-items: center; justify-content: center;
+  pointer-events: auto;
+}
+.strafe-button:active { background: rgba(219, 228, 214, 0.28); border-color: var(--accent); color: var(--accent); }
+.strafe-left { left: 50%; transform: translateX(-4.4rem); }
+.strafe-right { left: 50%; transform: translateX(1.2rem); }
+
 .gameover-title { color: var(--danger); font-size: 2.2rem; letter-spacing: 0.2rem; }
 .clear-title { color: var(--safe-green); font-size: 2.2rem; letter-spacing: 0.2rem; }
 
@@ -297,7 +312,6 @@ html, body {
 
   <div class="howto">
     <p>🏃 その場で駆け足 → 前進</p>
-    <p>↔️ 端末を左右に傾ける → 正面を向いたまま横移動</p>
     <p>⌨️ 矢印キー/WASD → 移動(PCでの操作用)</p>
     <p>📱 端末の向き → 視点</p>
     <p>👆 画面をタップ → 発射</p>
@@ -341,6 +355,9 @@ html, body {
 
   <div id="damage-flash" class="damage-flash"></div>
   <div id="kill-message" class="kill-message"></div>
+
+  <button id="btn-strafe-left" class="strafe-button strafe-left" aria-label="左に移動">◀</button>
+  <button id="btn-strafe-right" class="strafe-button strafe-right" aria-label="右に移動">▶</button>
 
   <button id="btn-recenter" class="recenter-button" aria-label="正面をリセット">
     <span class="recenter-icon">↻</span>
@@ -669,7 +686,6 @@ const SensorSystem = (() => {
     rollDeg: 0, // 左右の傾き(参考値、表示用)
     forward: new THREE.Vector3(0, 0, -1), // 移動用の水平前進ベクトル(オイラー角を経由しない)
     right: new THREE.Vector3(1, 0, 0),    // 移動用の水平右ベクトル
-    tiltRoll: 0, // 端末の左右の傾き強度(-1〜1程度)。ストレイフ操作に使用
     isRunning: false,
     lastRunPeakTime: 0,
   };
@@ -694,12 +710,9 @@ const SensorSystem = (() => {
     state.rollDeg = THREE.MathUtils.radToDeg(e.z);
 
     // 移動方向: 実際の3Dベクトル(カメラの向きと完全に同じ計算式)を水平面に投影して求める。
-    // カメラの見た目の向きと、走る方向・ストレイフ方向が必ず一致するようにするため。
+    // カメラの見た目の向きと、走る方向が必ず一致するようにするため。
     const fwd3 = new THREE.Vector3(0, 0, -1).applyQuaternion(rel);
     const right3 = new THREE.Vector3(1, 0, 0).applyQuaternion(rel);
-
-    // 端末の左右の傾き(ストレイフ)の強さは、水平投影する「前」のright3のY成分から求める
-    state.tiltRoll = right3.y;
 
     fwd3.y = 0;
     if (fwd3.lengthSq() > 1e-6) fwd3.normalize(); else fwd3.set(0, 0, -1);
@@ -772,7 +785,6 @@ const SensorSystem = (() => {
     state.rollDeg = 0;
     state.forward.set(0, 0, -1);
     state.right.set(1, 0, 0);
-    state.tiltRoll = 0;
     state.calibrated = true;
   }
 
@@ -1630,9 +1642,6 @@ const EnemyManager = (() => {
 
 (() => {
   const PLAYER_SPEED = 4.6;      // 駆け足検出中の前進速度 (units/sec)
-  const STRAFE_SPEED = 3.6;      // 傾きによる横移動速度 (units/sec)
-  const STRAFE_DEADZONE = 0.05;  // ストレイフが働き始める傾き強度(0〜1、tiltRollの値)
-  const STRAFE_FULL = 0.4;       // この強度でストレイフ速度が最大になる
   const PLAYER_RADIUS = 0.35;    // 衝突判定用の簡易半径
   const EYE_HEIGHT = 1.65;
   const WALL_HEIGHT = 3.2;
@@ -1649,6 +1658,8 @@ const EnemyManager = (() => {
     btnRetry: document.getElementById('btn-retry'),
     btnFire: document.getElementById('btn-fire'),
     btnRecenter: document.getElementById('btn-recenter'),
+    btnStrafeLeft: document.getElementById('btn-strafe-left'),
+    btnStrafeRight: document.getElementById('btn-strafe-right'),
     btnRestartOver: document.getElementById('btn-restart-over'),
     btnRestartClear: document.getElementById('btn-restart-clear'),
     hpFill: document.getElementById('hp-bar-fill'),
@@ -2221,6 +2232,20 @@ const EnemyManager = (() => {
   el.btnRecenter.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); recenterDirection(); }, { passive: false });
   el.btnRecenter.addEventListener('mousedown', (e) => { e.stopPropagation(); recenterDirection(); });
 
+  // ---- 画面上の左右移動ボタン(押している間だけ移動。矢印キーと同じkeyStateを共有) ----
+  function bindHoldButton(btnEl, stateKey) {
+    const press = (e) => { e.preventDefault(); e.stopPropagation(); keyState[stateKey] = true; };
+    const release = (e) => { e.preventDefault(); e.stopPropagation(); keyState[stateKey] = false; };
+    btnEl.addEventListener('touchstart', press, { passive: false });
+    btnEl.addEventListener('touchend', release, { passive: false });
+    btnEl.addEventListener('touchcancel', release, { passive: false });
+    btnEl.addEventListener('mousedown', press);
+    btnEl.addEventListener('mouseup', release);
+    btnEl.addEventListener('mouseleave', release);
+  }
+  bindHoldButton(el.btnStrafeLeft, 'left');
+  bindHoldButton(el.btnStrafeRight, 'right');
+
   // ---- プレイヤー被弾・敵撃破コールバック ----
   function onPlayerDamage(dmg) {
     if (gameState !== 'playing') return;
@@ -2381,16 +2406,6 @@ const EnemyManager = (() => {
       if (keyState.right) {
         moveX += rightVec.x; moveZ += rightVec.z;
         speedBudget = Math.max(speedBudget, PLAYER_SPEED);
-      }
-
-      // 端末を左右に傾けると、正面を向いたまま横に移動する(狭い部屋でも体を回さず操作できる)
-      const tilt = SensorSystem.state.tiltRoll;
-      if (Math.abs(tilt) > STRAFE_DEADZONE) {
-        const t = Math.min(1, (Math.abs(tilt) - STRAFE_DEADZONE) / (STRAFE_FULL - STRAFE_DEADZONE));
-        const rollStrafe = Math.sign(tilt) * t;
-        moveX += rightVec.x * rollStrafe;
-        moveZ += rightVec.z * rollStrafe;
-        speedBudget = Math.max(speedBudget, STRAFE_SPEED);
       }
 
       if (moveX !== 0 || moveZ !== 0) {
