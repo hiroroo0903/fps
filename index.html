@@ -1,4 +1,4 @@
-　<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
@@ -222,6 +222,22 @@ html, body {
   border-radius: 4px;
 }
 
+.debug-panel {
+  position: absolute; top: 9.5rem; left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.7);
+  color: #7CFC00;
+  font-family: 'Courier New', monospace;
+  font-size: 0.62rem;
+  line-height: 1.4;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid rgba(124, 252, 0, 0.4);
+  white-space: pre;
+  text-align: left;
+  pointer-events: none;
+  max-width: 90vw;
+}
+
 .damage-flash {
   position: absolute; inset: 0;
   background: radial-gradient(ellipse at center, rgba(255,0,0,0) 40%, rgba(255,0,0,0.35) 100%);
@@ -403,6 +419,8 @@ html, body {
   </div>
 
   <canvas id="minimap" class="minimap" width="130" height="130"></canvas>
+
+  <div id="debug-panel" class="debug-panel"></div>
 
   <div id="damage-flash" class="damage-flash"></div>
   <div id="kill-message" class="kill-message"></div>
@@ -736,12 +754,21 @@ const SensorSystem = (() => {
     return window.orientation || 0;
   }
 
-  function computeDeviceQuaternion(alpha, beta, gamma) {
+  function computeDeviceQuaternion(event) {
     const orient = THREE.MathUtils.degToRad(screenOrientationAngle());
+
+    // alpha(方位角)は端末を縦に構えた姿勢(beta≈90°付近)で不安定になることがある(iOSの既知の問題)。
+    // iOS Safariが提供するwebkitCompassHeadingはこの影響を受けにくいため、利用可能ならこちらを優先する。
+    // 回転方向・基準がalphaとは異なるが、常に相対値(校正との差分)としてしか使わないため問題ない。
+    let alphaDeg = event.alpha;
+    if (typeof event.webkitCompassHeading === 'number' && !Number.isNaN(event.webkitCompassHeading)) {
+      alphaDeg = 360 - event.webkitCompassHeading;
+    }
+
     euler.set(
-      THREE.MathUtils.degToRad(beta),
-      THREE.MathUtils.degToRad(alpha),
-      -THREE.MathUtils.degToRad(gamma),
+      THREE.MathUtils.degToRad(event.beta),
+      THREE.MathUtils.degToRad(alphaDeg),
+      -THREE.MathUtils.degToRad(event.gamma),
       'YXZ'
     );
     const q = new THREE.Quaternion().setFromEuler(euler);
@@ -773,6 +800,8 @@ const SensorSystem = (() => {
     isRunning: false,
     runIntensity: 0, // 足踏みの激しさ(0〜1)。移動速度のスケーリングに使用
     lastRunPeakTime: 0,
+    debugRaw: { alpha: null, beta: null, gamma: null, compass: null }, // デバッグ表示用の生センサー値
+    debugLastCalibrateYawDeg: null,
   };
 
   // 低域通過フィルタ推定値(重力方向・姿勢のベースライン)
@@ -805,8 +834,16 @@ const SensorSystem = (() => {
   }
 
   function handleOrientation(event) {
-    if (event.alpha === null || event.beta === null || event.gamma === null) return;
-    currentDeviceQuaternion = computeDeviceQuaternion(event.alpha, event.beta, event.gamma);
+    const hasCompass = typeof event.webkitCompassHeading === 'number' && !Number.isNaN(event.webkitCompassHeading);
+    if (event.beta === null || event.gamma === null) return;
+    if (!hasCompass && event.alpha === null) return;
+
+    state.debugRaw.alpha = event.alpha;
+    state.debugRaw.beta = event.beta;
+    state.debugRaw.gamma = event.gamma;
+    state.debugRaw.compass = hasCompass ? event.webkitCompassHeading : null;
+
+    currentDeviceQuaternion = computeDeviceQuaternion(event);
 
     if (!state.calibrated) return;
 
@@ -883,6 +920,7 @@ const SensorSystem = (() => {
     const rawYaw = computeYawFromQuaternion(currentDeviceQuaternion);
     calibrationYawQuat.setFromAxisAngle(worldUp, -rawYaw);
     state.calibrated = true;
+    state.debugLastCalibrateYawDeg = THREE.MathUtils.radToDeg(rawYaw);
     // 次のイベントを待たず、この瞬間の姿勢を即座に反映する
     updateDerivedState(currentDeviceQuaternion);
   }
@@ -2119,6 +2157,7 @@ const AllyManager = (() => {
     hpValue: document.getElementById('hp-value'),
     enemyCount: document.getElementById('enemy-count'),
     minimapCanvas: document.getElementById('minimap'),
+    debugPanel: document.getElementById('debug-panel'),
     damageFlash: document.getElementById('damage-flash'),
     killMessage: document.getElementById('kill-message'),
     weaponCards: document.querySelectorAll('.weapon-card'),
@@ -2269,6 +2308,22 @@ const AllyManager = (() => {
         }
       }
     }
+  }
+
+  // ---- デバッグパネル(センサーの生値をリアルタイム表示。原因調査用) ----
+  function updateDebugPanel() {
+    if (!el.debugPanel) return;
+    const d = SensorSystem.state.debugRaw;
+    const fmt = (v) => (v === null || v === undefined || Number.isNaN(v)) ? '---' : v.toFixed(1);
+    const lastCal = SensorSystem.state.debugLastCalibrateYawDeg;
+    el.debugPanel.textContent =
+      `raw α:${fmt(d.alpha)} β:${fmt(d.beta)} γ:${fmt(d.gamma)} compass:${fmt(d.compass)}
+` +
+      `yaw:${fmt(SensorSystem.state.yawDeg)} pitch:${fmt(SensorSystem.state.pitchDeg)} roll:${fmt(SensorSystem.state.rollDeg)}
+` +
+      `最後の校正yaw(生):${fmt(lastCal)}
+` +
+      `pos: x=${playerPos.x.toFixed(2)} z=${playerPos.z.toFixed(2)}`;
   }
 
   function renderMinimap() {
@@ -2939,6 +2994,7 @@ const AllyManager = (() => {
       }
       updateBulletHoles();
       renderMinimap();
+      updateDebugPanel();
     }
 
     if (renderer && scene && camera) {
