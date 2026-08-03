@@ -736,14 +736,17 @@ const SensorSystem = (() => {
   const LOWPASS_ALPHA = 0.12;          // 重力/姿勢成分を推定する低域通過フィルタ係数
 
   // ---- THREE.js を用いた向きのクォータニオン計算(標準的なAR的手法) ----
-  // 校正は「左右の向き(ヨー角)」だけを基準に合わせる。上下の傾き(ピッチ)・左右の傾き(ロール)は
-  // 常にその場の端末の生の傾きをそのまま使う(ボタンを押す際に指を伸ばしてわずかに下向きに
-  // 傾いてしまっても、その傾きが基準として固定されてしまわないようにするため)。
-  let calibrationYawQuat = new THREE.Quaternion(); // ヨーのオフセットを打ち消す回転
-  let currentDeviceQuaternion = new THREE.Quaternion();      // 平滑化後(カメラ描画・移動方向に使用)
-  let currentRawDeviceQuaternion = new THREE.Quaternion();   // 平滑化前(校正=正面リセットに使用。遅延なし)
-  let smoothedDeviceQuaternion = new THREE.Quaternion(); // 平滑化後の姿勢(ノイズ対策)
-  let smoothInit = false;
+  // 校正は「今画面に見えている方向」をそのまま新しい正面(0度)にする、というシンプルな仕組み。
+  // 上下の傾き(ピッチ)・左右の傾き(ロール)は校正の影響を受けず、常にその場の生の値を使う。
+  //
+  // 【重要な注意】このゲームのように端末をほぼ垂直(beta≈90°)に構える姿勢では、
+  // 「体の向き(alpha)」と「手首の傾き(gamma)」が数学的に区別できなくなる(ジンバルロック)。
+  // そのため、正面リセット後に手首の角度が変わると、体を回していなくても正面が動いて見える
+  // ことがある。これはこの姿勢そのものの物理的な限界であり、完全にはソフトウェアで解決できない。
+  // 対策として、3Dベクトル(手首の傾きの影響も含めて素直に計算する)を使い、
+  // 特定の一軸だけを別計算で無理に切り出すようなことはしない。
+  let calibYawOffset = 0; // 正面リセットで設定される、ヨーのオフセット(ラジアン)
+  let currentRawQuaternion = new THREE.Quaternion(); // 生のクォータニオン(常に最新)
   let zee = new THREE.Vector3(0, 0, 1);
   let euler = new THREE.Euler();
   let q0 = new THREE.Quaternion();
@@ -780,7 +783,7 @@ const SensorSystem = (() => {
     return q;
   }
 
-  // クォータニオンの水平方向の向き(ヨー角)だけを、ピッチ・ロールの影響を受けずに求める
+  // クォータニオンの水平方向の向き(手首の傾きの影響も含めて素直に)求める
   function computeYawFromQuaternion(q) {
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
     fwd.y = 0;
@@ -803,27 +806,29 @@ const SensorSystem = (() => {
     isRunning: false,
     runIntensity: 0, // 足踏みの激しさ(0〜1)。移動速度のスケーリングに使用
     lastRunPeakTime: 0,
+    lastFastRotationTime: 0,
     debugRaw: { alpha: null, beta: null, gamma: null, compass: null, rotMag: null, isRunning: false }, // デバッグ表示用の生センサー値
     debugLastCalibrateYawDeg: null,
+    debugYawOffsetDeg: 0,
     hasReceivedOrientation: false, // 実際のセンサー値を一度でも受信したか
   };
 
   // 低域通過フィルタ推定値(重力方向・姿勢のベースライン)
   let lpX = 0, lpY = 0, lpZ = 0, lpInit = false;
 
-  function updateDerivedState(deviceQ) {
-    // ヨーだけを校正基準に合わせて回転させる。ピッチ・ロールは常に生の値をそのまま反映する。
-    const rel = calibrationYawQuat.clone().multiply(deviceQ);
+  function updateDerivedState(rawQ) {
+    // ヨーのオフセット(校正で決まる)を、生のクォータニオンに単純に上乗せするだけ。
+    const yawQuat = new THREE.Quaternion().setFromAxisAngle(worldUp, -calibYawOffset);
+    const rel = yawQuat.multiply(rawQ);
     state.quaternion.copy(rel);
 
-    // 表示・参考用にyaw・pitch・rollを抽出(YXZ順)。移動方向の計算には使わない
-    // (オイラー角はピッチ・ロールが同時に大きいと数値が結合してズレるため)
+    // 表示・参考用にyaw・pitch・rollを抽出(YXZ順、あくまで参考値)
     const e = new THREE.Euler().setFromQuaternion(rel, 'YXZ');
     state.yawDeg = THREE.MathUtils.radToDeg(e.y);
     state.pitchDeg = THREE.MathUtils.radToDeg(e.x);
     state.rollDeg = THREE.MathUtils.radToDeg(e.z);
 
-    // 移動方向: 実際の3Dベクトル(カメラの向きと完全に同じ計算式)を水平面に投影して求める。
+    // 移動方向・カメラの向き: 実際の3Dベクトルを水平面に投影して求める。
     // カメラの見た目の向きと、走る方向が必ず一致するようにするため。
     const fwd3 = new THREE.Vector3(0, 0, -1).applyQuaternion(rel);
     const right3 = new THREE.Vector3(1, 0, 0).applyQuaternion(rel);
@@ -848,25 +853,11 @@ const SensorSystem = (() => {
     state.debugRaw.compass = hasCompass ? event.webkitCompassHeading : null;
     state.hasReceivedOrientation = true;
 
-    const rawQ = computeDeviceQuaternion(event);
-    currentRawDeviceQuaternion.copy(rawQ); // 校正用: 遅延のない最新値をそのまま保持
-
-    // 姿勢を平滑化する(このゲームが前提とする「端末を縦に構える」姿勢は、
-    // コンパスセンサーの精度が落ちやすい角度のため、瞬間的なノイズによる
-    // 大きなブレを抑えるために低域通過フィルタ(slerp)をかける)。
-    // ただしこれはカメラ描画・移動方向にのみ使う。正面リセットの校正には使わない
-    // (平滑化には遅延が伴うため、校正の瞬間は生の値の方が正確なため)。
-    if (!smoothInit) {
-      smoothedDeviceQuaternion.copy(rawQ);
-      smoothInit = true;
-    } else {
-      smoothedDeviceQuaternion.slerp(rawQ, 0.18);
-    }
-    currentDeviceQuaternion = smoothedDeviceQuaternion.clone();
+    currentRawQuaternion.copy(computeDeviceQuaternion(event));
 
     if (!state.calibrated) return;
 
-    updateDerivedState(currentDeviceQuaternion);
+    updateDerivedState(currentRawQuaternion);
   }
 
   function handleMotion(event) {
@@ -883,7 +874,13 @@ const SensorSystem = (() => {
     const rotMag = rot
       ? Math.sqrt((rot.alpha || 0) ** 2 + (rot.beta || 0) ** 2 + (rot.gamma || 0) ** 2)
       : 0;
-    const isRotatingFast = rotMag > 80; // deg/s
+    const now = performance.now();
+    if (rotMag > 45) { // deg/s。傾け動作は多くの場合これより速い
+      state.lastFastRotationTime = now;
+    }
+    // 回転中、および回転が収まった直後もしばらく(クールダウン)は足踏み判定を抑制する
+    // (重力方向の変化が低域通過フィルタに残り続けるため、回転直後も誤検知しやすい)
+    const isRotatingOrCoolingDown = (now - state.lastFastRotationTime) < 350;
 
     if (!lpInit) {
       lpX = acc.x; lpY = acc.y; lpZ = acc.z; lpInit = true;
@@ -900,11 +897,9 @@ const SensorSystem = (() => {
     const hz = acc.z - lpZ;
     const highMag = Math.sqrt(hx * hx + hy * hy + hz * hz);
 
-    const now = performance.now();
-
     // --- 駆け足(足踏み)判定: 中程度の周期的ピーク ---
     // ピークの大きさから「足踏みの激しさ」(runIntensity, 0〜1)も算出する
-    if (highMag > RUN_PEAK_THRESHOLD && !isRotatingFast && now - state.lastRunPeakTime > RUN_MIN_INTERVAL_MS) {
+    if (highMag > RUN_PEAK_THRESHOLD && !isRotatingOrCoolingDown && now - state.lastRunPeakTime > RUN_MIN_INTERVAL_MS) {
       state.lastRunPeakTime = now;
       const peakIntensity = Math.min(
         1,
@@ -946,19 +941,14 @@ const SensorSystem = (() => {
     return state.permissionGranted;
   }
 
-  // 正面リセット: 現在向いている「左右の方向(ヨー角)」だけを正面として校正する。
-  // 上下の傾き(ピッチ)・左右の傾き(ロール)はここでは固定しない(常に生の値を使う)ため、
-  // ボタンを押す際に指を伸ばしてわずかに下向きになっても、視点が変な方向にズレない。
+  // 正面リセット: 今画面に見えている方向を、そのまま新しい正面(ヨー0度)にする。
+  // 上下の傾き(ピッチ)・左右の傾き(ロール)はここでは固定しない(常に生の値を使う)。
   function calibrate() {
-    const rawYaw = computeYawFromQuaternion(currentRawDeviceQuaternion);
-    calibrationYawQuat.setFromAxisAngle(worldUp, -rawYaw);
+    calibYawOffset = computeYawFromQuaternion(currentRawQuaternion);
     state.calibrated = true;
-    state.debugLastCalibrateYawDeg = THREE.MathUtils.radToDeg(rawYaw);
-    // 校正直後は平滑化バッファも今の姿勢にスナップさせ、古い値との混合(遅延)を残さない
-    smoothedDeviceQuaternion.copy(currentRawDeviceQuaternion);
-    currentDeviceQuaternion.copy(currentRawDeviceQuaternion);
+    state.debugLastCalibrateYawDeg = THREE.MathUtils.radToDeg(calibYawOffset);
     // 次のイベントを待たず、この瞬間の姿勢を即座に反映する
-    updateDerivedState(currentDeviceQuaternion);
+    updateDerivedState(currentRawQuaternion);
   }
 
   // 実際のセンサー値が最低1回届くまで待つ(ゲーム開始時、初期値のまま校正してしまうのを防ぐ)
