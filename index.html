@@ -193,6 +193,28 @@ html, body {
   100% { opacity: 0; }
 }
 
+.kill-message {
+  position: absolute; top: 32%; left: 50%;
+  transform: translate(-50%, -50%) scale(0.8);
+  font-size: 1.2rem;
+  font-weight: bold;
+  letter-spacing: 0.1rem;
+  color: var(--accent);
+  text-shadow: 0 0 12px rgba(255, 176, 32, 0.6);
+  opacity: 0;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.kill-message.headshot { color: var(--danger); text-shadow: 0 0 14px rgba(255, 59, 48, 0.7); font-size: 1.5rem; }
+.kill-message.show { animation: kill-pop 1.1s ease-out; }
+@keyframes kill-pop {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.7); }
+  15%  { opacity: 1; transform: translate(-50%, -50%) scale(1.08); }
+  30%  { transform: translate(-50%, -50%) scale(1); }
+  75%  { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -60%) scale(1); }
+}
+
 .fire-button {
   position: absolute; right: 1rem; bottom: 1rem;
   width: 4.6rem; height: 4.6rem;
@@ -204,6 +226,22 @@ html, body {
   pointer-events: auto;
 }
 .fire-button:active { background: rgba(255, 59, 48, 0.5); }
+
+.recenter-button {
+  position: absolute; left: 1rem; bottom: 1rem;
+  width: 3.8rem; height: 3.8rem;
+  border-radius: 50%;
+  background: rgba(255, 176, 32, 0.2);
+  border: 2px solid var(--accent);
+  color: var(--accent);
+  font-family: inherit;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  line-height: 1;
+  pointer-events: auto;
+}
+.recenter-button:active { background: rgba(255, 176, 32, 0.45); }
+.recenter-icon { font-size: 1.3rem; }
+.recenter-label { font-size: 0.55rem; letter-spacing: 0.05rem; margin-top: 0.1rem; }
 
 .gameover-title { color: var(--danger); font-size: 2.2rem; letter-spacing: 0.2rem; }
 .clear-title { color: var(--safe-green); font-size: 2.2rem; letter-spacing: 0.2rem; }
@@ -251,8 +289,11 @@ html, body {
 
   <div class="howto">
     <p>🏃 その場で駆け足 → 前進</p>
+    <p>↔️ 端末を左右に傾ける → 正面を向いたまま横移動</p>
+    <p>⌨️ 矢印キー/WASD → 移動(PCでの操作用)</p>
     <p>📱 端末の向き → 視点</p>
     <p>👆 画面をタップ → 発射</p>
+    <p>↻ 「正面」ボタン → 今向いている方向を正面にリセット</p>
   </div>
 
   <button id="btn-start" class="btn-primary">スタート</button>
@@ -289,6 +330,12 @@ html, body {
   </div>
 
   <div id="damage-flash" class="damage-flash"></div>
+  <div id="kill-message" class="kill-message"></div>
+
+  <button id="btn-recenter" class="recenter-button" aria-label="正面をリセット">
+    <span class="recenter-icon">↻</span>
+    <span class="recenter-label">正面</span>
+  </button>
 
   <button id="btn-fire" class="fire-button" aria-label="発射">FIRE</button>
 </div>
@@ -315,12 +362,12 @@ html, body {
 // ============================================================
 // mapdata.js
 // 固定の手作りマップレイアウト(部屋+通路構成)をグリッドとして定義する。
-// グリッドは 20x20。0 = 壁, 1 = 床。
+// グリッドは 26x26。0 = 壁, 1 = 床。
 // 部屋・通路は「矩形(x,y,w,h)」のリストとして人手でデザインし、
 // それをもとにグリッドを構築する(ASCIIアートより誤り無く再現しやすいため)。
 // ============================================================
 
-const GRID_SIZE = 20;
+const GRID_SIZE = 26;
 const CELL_SIZE = 4; // Three.js空間上の1マスのサイズ(unit)
 
 // 部屋の矩形定義 [x, y, w, h] (グリッド座標、外周1マスは常に壁として残す)
@@ -333,6 +380,10 @@ const ROOMS = [
   { id: 'F', x: 15, y: 9, w: 4, h: 6, name: '東南の部屋' },
   { id: 'G', x: 1, y: 15, w: 6, h: 4, name: '南西の部屋' },
   { id: 'H', x: 9, y: 15, w: 5, h: 4, name: '南の部屋' },
+  // --- 増築エリア(迂回ルート・フランキングルート・戦闘用の広い空間) ---
+  { id: 'I', x: 20, y: 1, w: 4, h: 5, name: '東の増築室' },
+  { id: 'J', x: 20, y: 9, w: 5, h: 6, name: '東南アリーナ' },
+  { id: 'K', x: 8, y: 20, w: 9, h: 4, name: '南の大部屋' },
 ];
 
 // 通路の矩形定義(部屋同士をつなぐ)
@@ -346,6 +397,19 @@ const CORRIDORS = [
   { x: 2, y: 13, w: 2, h: 2 },  // D - G
   { x: 10, y: 14, w: 2, h: 1 }, // E - H
   { x: 7, y: 16, w: 2, h: 2 },  // G - H
+  // --- 増築エリアへの接続。C-I-J-Fで一周できるループ(フランキングルート)を形成 ---
+  { x: 19, y: 2, w: 1, h: 2 },  // C - I
+  { x: 21, y: 6, w: 2, h: 3 },  // I - J
+  { x: 19, y: 10, w: 1, h: 2 }, // J - F
+  { x: 10, y: 19, w: 2, h: 1 }, // H - K
+];
+
+// 部屋内の遮蔽物(クレート)。視線と移動を遮る戦術的な障害物。
+// グリッド上は壁と同様に通行不可として扱うが、見た目・高さは壁と区別する。
+const OBSTACLE_CELLS = [
+  { gx: 9, gy: 9 }, { gx: 12, gy: 12 },   // 中央広間(E)
+  { gx: 22, gy: 11 }, { gx: 23, gy: 13 }, // 東南アリーナ(J)
+  { gx: 11, gy: 21 }, { gx: 14, gy: 22 }, // 南の大部屋(K)
 ];
 
 function buildGrid() {
@@ -372,6 +436,9 @@ function buildGrid() {
 }
 
 const MAP_GRID = buildGrid();
+
+// 遮蔽物セルを通行不可にする(構造壁とは別扱い。描画はcrate状にする)
+OBSTACLE_CELLS.forEach((o) => { MAP_GRID[o.gy][o.gx] = 0; });
 
 // ドア開口部(部屋と通路が接する境界)を矩形の隣接関係から自動算出する。
 // 各要素: { axis: 'x'|'z', ...境界座標(グリッド単位)..., roomId }
@@ -589,6 +656,7 @@ const SensorSystem = (() => {
     quaternion: new THREE.Quaternion(), // 校正済み・相対姿勢
     yawDeg: 0,
     pitchDeg: 0,
+    rollDeg: 0, // 左右の傾き(ストレイフ操作に使用)
     isRunning: false,
     lastRunPeakTime: 0,
   };
@@ -605,10 +673,11 @@ const SensorSystem = (() => {
     const rel = calibrationInverse.clone().multiply(currentDeviceQuaternion);
     state.quaternion.copy(rel);
 
-    // HUD/判定用にyaw・pitchを抽出(YXZ順)
+    // HUD/判定用にyaw・pitch・rollを抽出(YXZ順)
     const e = new THREE.Euler().setFromQuaternion(rel, 'YXZ');
     state.yawDeg = THREE.MathUtils.radToDeg(e.y);
     state.pitchDeg = THREE.MathUtils.radToDeg(e.x);
+    state.rollDeg = THREE.MathUtils.radToDeg(e.z);
   }
 
   function handleMotion(event) {
@@ -670,6 +739,7 @@ const SensorSystem = (() => {
     state.quaternion.identity();
     state.yawDeg = 0;
     state.pitchDeg = 0;
+    state.rollDeg = 0;
     state.calibrated = true;
   }
 
@@ -1197,16 +1267,27 @@ const EnemyManager = (() => {
     group.add(gunGroup);
 
     // 命中判定用の当たり判定メッシュ(見た目より一回り大きい・非表示)
-    const hitbox = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.32 * s, 0.72 * s, 4, 8),
+    // 頭部と胴体を分けて、ヘッドショット判定を可能にする
+    const headHitbox = new THREE.Mesh(
+      new THREE.SphereGeometry(0.24 * s, 8, 8),
       new THREE.MeshBasicMaterial({ visible: false })
     );
-    hitbox.position.y = 0.62 * s;
-    group.add(hitbox);
+    headHitbox.position.y = 1.08 * s;
+    headHitbox.userData.isHead = true;
+    group.add(headHitbox);
+
+    const bodyHitbox = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.3 * s, 0.5 * s, 4, 8),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    bodyHitbox.position.y = 0.5 * s;
+    bodyHitbox.userData.isHead = false;
+    group.add(bodyHitbox);
 
     group.userData.core = core;
     group.userData.coreMat = coreMat;
-    group.userData.hitbox = hitbox;
+    group.userData.headHitbox = headHitbox;
+    group.userData.bodyHitbox = bodyHitbox;
     group.userData.legLPivot = legLPivot;
     group.userData.legRPivot = legRPivot;
     group.userData.walkPhase = Math.random() * Math.PI * 2;
@@ -1235,13 +1316,17 @@ const EnemyManager = (() => {
       hp: def.hp,
       maxHp: def.hp,
       pos: new THREE.Vector3(world.x, 0, world.z),
-      state: 'idle', // idle | chase | telegraph | melee_cooldown
+      state: 'idle', // idle(巡回中) | chase | telegraph | melee_range
       path: [],
       pathTimer: 0,
       telegraphTimer: 0,
       attackCooldown: 0,
       alive: true,
+      spawnGrid: { gx: spawnDef.gx, gy: spawnDef.gy },
+      patrolTimer: Math.random() * 1.5, // 敵ごとにずらして一斉に動き出さないようにする
     };
+    mesh.userData.headHitbox.userData.enemyRef = enemy;
+    mesh.userData.bodyHitbox.userData.enemyRef = enemy;
     enemies.push(enemy);
     return enemy;
   }
@@ -1263,13 +1348,25 @@ const EnemyManager = (() => {
     spawns.forEach(spawn);
   }
 
-  function damageEnemy(enemy, amount) {
+  function damageEnemy(enemy, amount, isHeadshot) {
     if (!enemy.alive) return;
-    enemy.hp -= amount;
+
+    if (isHeadshot) {
+      // ヘッドショットは確実に撃破
+      enemy.hp = 0;
+    } else {
+      // 体への攻撃: 満タンHPからの初弾では一撃で倒れないようにする(最低1は残す)
+      let dmg = amount;
+      if (enemy.hp >= enemy.maxHp) {
+        dmg = Math.min(amount, enemy.maxHp - 1);
+      }
+      enemy.hp -= dmg;
+    }
+
     if (enemy.hp <= 0) {
       enemy.alive = false;
       scene.remove(enemy.mesh);
-      if (onEnemyKilled) onEnemyKilled(enemy);
+      if (onEnemyKilled) onEnemyKilled(enemy, isHeadshot);
     }
   }
 
@@ -1337,7 +1434,7 @@ const EnemyManager = (() => {
     }
   }
 
-  function moveAlongPath(enemy, dt) {
+  function moveAlongPath(enemy, dt, speedMult = 1.0) {
     if (enemy.path.length === 0) {
       animateLegs(enemy, dt, false);
       return;
@@ -1347,7 +1444,7 @@ const EnemyManager = (() => {
     const target = new THREE.Vector3(nw.x, 0, nw.z);
     const dir = new THREE.Vector3().subVectors(target, enemy.pos);
     const dist = dir.length();
-    const step = enemy.def.speed * dt;
+    const step = enemy.def.speed * speedMult * dt;
 
     if (dist <= step) {
       enemy.pos.copy(target);
@@ -1376,9 +1473,26 @@ const EnemyManager = (() => {
       switch (enemy.state) {
         case 'idle': {
           setCoreColor(enemy, 0x333333);
-          animateLegs(enemy, dt, false);
+
+          // 巡回: スポーン地点付近をランダムに歩き回り、常に動き続ける
+          if (enemy.path.length === 0) {
+            enemy.patrolTimer -= dt;
+            if (enemy.patrolTimer <= 0) {
+              enemy.patrolTimer = 1.2 + Math.random() * 1.2;
+              const radius = 3; // スポーン地点からのマス数
+              const tx = enemy.spawnGrid.gx + Math.round((Math.random() * 2 - 1) * radius);
+              const ty = enemy.spawnGrid.gy + Math.round((Math.random() * 2 - 1) * radius);
+              if (isWalkable(tx, ty)) {
+                const startGrid = worldToGrid(enemy.pos.x, enemy.pos.z);
+                enemy.path = findPath(startGrid, { gx: tx, gy: ty });
+              }
+            }
+          }
+          moveAlongPath(enemy, dt, 0.45); // 巡回中はゆっくり歩く
+
           if (distToPlayer < def.detectRange) {
             enemy.state = 'chase';
+            enemy.path = [];
           }
           break;
         }
@@ -1439,12 +1553,18 @@ const EnemyManager = (() => {
   }
 
   function raycastHit(raycaster) {
-    // ヒットボックス(見た目より大きめ)のみを対象にレイキャストする
-    const hitboxes = enemies.filter(e => e.alive).map(e => e.mesh.userData.hitbox);
-    const intersects = raycaster.intersectObjects(hitboxes, false);
+    // 頭部・胴体のヒットボックス(見た目より大きめ)をまとめてレイキャストし、最も近い命中を採用する
+    const targets = [];
+    enemies.forEach((e) => {
+      if (!e.alive) return;
+      targets.push(e.mesh.userData.headHitbox, e.mesh.userData.bodyHitbox);
+    });
+    const intersects = raycaster.intersectObjects(targets, false);
     if (intersects.length === 0) return null;
     const hitObj = intersects[0].object;
-    return enemies.find(e => e.mesh.userData.hitbox === hitObj) || null;
+    const enemy = hitObj.userData.enemyRef;
+    if (!enemy) return null;
+    return { enemy, isHeadshot: hitObj.userData.isHead === true };
   }
 
   function getAliveCount() {
@@ -1469,7 +1589,10 @@ const EnemyManager = (() => {
 // ============================================================
 
 (() => {
-  const PLAYER_SPEED = 3.4;      // 駆け足検出中の前進速度 (units/sec)
+  const PLAYER_SPEED = 4.6;      // 駆け足検出中の前進速度 (units/sec)
+  const STRAFE_SPEED = 3.6;      // 傾きによる横移動速度 (units/sec)
+  const STRAFE_ROLL_THRESHOLD = 14; // ストレイフが働き始める傾き角度(度)
+  const STRAFE_ROLL_MAX = 40;       // この角度でストレイフ速度が最大になる
   const PLAYER_RADIUS = 0.35;    // 衝突判定用の簡易半径
   const EYE_HEIGHT = 1.65;
   const WALL_HEIGHT = 3.2;
@@ -1485,12 +1608,14 @@ const EnemyManager = (() => {
     btnStart: document.getElementById('btn-start'),
     btnRetry: document.getElementById('btn-retry'),
     btnFire: document.getElementById('btn-fire'),
+    btnRecenter: document.getElementById('btn-recenter'),
     btnRestartOver: document.getElementById('btn-restart-over'),
     btnRestartClear: document.getElementById('btn-restart-clear'),
     hpFill: document.getElementById('hp-bar-fill'),
     hpValue: document.getElementById('hp-value'),
     enemyCount: document.getElementById('enemy-count'),
     damageFlash: document.getElementById('damage-flash'),
+    killMessage: document.getElementById('kill-message'),
     weaponCards: document.querySelectorAll('.weapon-card'),
     diffCards: document.querySelectorAll('.diff-card'),
     canvasContainer: document.getElementById('canvas-container'),
@@ -1506,6 +1631,7 @@ const EnemyManager = (() => {
   let scene, camera, renderer, clock;
   let raycaster;
   let wallGroup = null;
+  let columnObstacles = []; // 支柱の当たり判定 {x, z, radius}
   let bulletHoles = []; // {mesh, spawnTime}
   const BULLET_HOLE_LIFETIME = 16000; // ms(しばらくすると消える)
   const BULLET_HOLE_FADE = 2500;      // ms(消える直前にフェードアウト)
@@ -1516,6 +1642,23 @@ const EnemyManager = (() => {
   let startTime = 0;
 
   // ---- 武器選択UI ----
+  // ---- キーボード操作(矢印キー/WASD、PCでのテストや補助操作用) ----
+  const keyState = { forward: false, back: false, left: false, right: false };
+  const KEY_MAP = {
+    ArrowUp: 'forward', KeyW: 'forward',
+    ArrowDown: 'back', KeyS: 'back',
+    ArrowLeft: 'left', KeyA: 'left',
+    ArrowRight: 'right', KeyD: 'right',
+  };
+  window.addEventListener('keydown', (e) => {
+    const dir = KEY_MAP[e.code];
+    if (dir) { keyState[dir] = true; e.preventDefault(); }
+  });
+  window.addEventListener('keyup', (e) => {
+    const dir = KEY_MAP[e.code];
+    if (dir) { keyState[dir] = false; e.preventDefault(); }
+  });
+
   el.weaponCards.forEach(card => {
     card.addEventListener('click', () => {
       el.weaponCards.forEach(c => c.classList.remove('selected'));
@@ -1565,6 +1708,7 @@ const EnemyManager = (() => {
     buildRoomCarpets();
     buildDoorframes();
     buildColumns();
+    buildCrates();
     buildCeilingLights();
     WeaponSystem.init(camera);
 
@@ -1643,6 +1787,8 @@ const EnemyManager = (() => {
   }
 
   function buildMap() {
+    const obstacleSet = new Set(OBSTACLE_CELLS.map(o => `${o.gx},${o.gy}`));
+
     const floorTex = buildFloorTexture();
     floorTex.repeat.set(GRID_SIZE, GRID_SIZE);
     const floorGeo = new THREE.PlaneGeometry(GRID_SIZE * CELL_SIZE, GRID_SIZE * CELL_SIZE);
@@ -1668,6 +1814,7 @@ const EnemyManager = (() => {
     for (let gy = 0; gy < GRID_SIZE; gy++) {
       for (let gx = 0; gx < GRID_SIZE; gx++) {
         if (MAP_GRID[gy][gx] === 0) {
+          if (obstacleSet.has(`${gx},${gy}`)) continue; // 遮蔽物セルは構造壁として描画しない(クレートとして別途描画)
           // 完全に孤立した壁(周囲に床が無い)は描画を省略して負荷を減らす
           const hasAdjacentFloor =
             isWalkable(gx + 1, gy) || isWalkable(gx - 1, gy) ||
@@ -1762,7 +1909,7 @@ const EnemyManager = (() => {
     });
   }
 
-  // ---- 広い部屋の支柱(オフィスビルの構造柱らしい演出) ----
+  // ---- 広い部屋の支柱(オフィスビルの構造柱らしい演出。当たり判定あり) ----
   function buildColumns() {
     const colMat = new THREE.MeshStandardMaterial({ color: 0xb9b6a9, roughness: 0.7 });
     ROOMS.forEach((room) => {
@@ -1770,15 +1917,36 @@ const EnemyManager = (() => {
       const cx = (room.x + room.w / 2 - GRID_SIZE / 2) * CELL_SIZE;
       const cz = (room.y + room.h / 2 - GRID_SIZE / 2) * CELL_SIZE;
       [-1, 1].forEach((side) => {
+        const colX = cx + side * CELL_SIZE * 1.3;
         const col = new THREE.Mesh(
           new THREE.CylinderGeometry(0.22, 0.22, WALL_HEIGHT, 12),
           colMat
         );
-        col.position.set(cx + side * CELL_SIZE * 1.3, WALL_HEIGHT / 2, cz);
-        scene.add(col);
+        col.position.set(colX, WALL_HEIGHT / 2, cz);
+        wallGroup.add(col); // 射撃の遮蔽判定にも使うため壁と同じグループに入れる
+        columnObstacles.push({ x: colX, z: cz, radius: 0.22 });
       });
     });
   }
+
+  // ---- 遮蔽物(クレート): 部屋内に置かれた戦術的な障害物。視線と移動を遮る ----
+  function buildCrates() {
+    const crateMat = new THREE.MeshStandardMaterial({ color: 0x7a5a3a, roughness: 0.9 });
+    const trimMat = new THREE.MeshStandardMaterial({ color: 0x3f2f1c, roughness: 0.8 });
+    const crateGeo = new THREE.BoxGeometry(CELL_SIZE * 0.82, 1.3, CELL_SIZE * 0.82);
+
+    OBSTACLE_CELLS.forEach((o) => {
+      const w = gridToWorld(o.gx, o.gy);
+      const crate = new THREE.Mesh(crateGeo, crateMat);
+      crate.position.set(w.x, 0.65, w.z);
+      wallGroup.add(crate);
+
+      const trimTop = new THREE.Mesh(new THREE.BoxGeometry(CELL_SIZE * 0.86, 0.06, CELL_SIZE * 0.86), trimMat);
+      trimTop.position.set(w.x, 1.3, w.z);
+      wallGroup.add(trimTop);
+    });
+  }
+
   function buildCeilingLights() {
     const fixtureMat = new THREE.MeshBasicMaterial({ color: 0xfff6e2 });
 
@@ -1814,6 +1982,12 @@ const EnemyManager = (() => {
     for (const [px, pz] of pts) {
       const g = worldToGrid(px, pz);
       if (!isWalkable(g.gx, g.gy)) return false;
+    }
+    // 支柱との円形衝突判定
+    for (const col of columnObstacles) {
+      const dx = x - col.x, dz = z - col.z;
+      const minDist = col.radius + r;
+      if (dx * dx + dz * dz < minDist * minDist) return false;
     }
     return true;
   }
@@ -1891,24 +2065,30 @@ const EnemyManager = (() => {
     AudioSystem.playShot(WeaponSystem.getDamage() / 40);
 
     raycaster.setFromCamera({ x: 0, y: 0 }, camera);
-    const hitEnemy = EnemyManager.raycastHit(raycaster);
-    if (hitEnemy) {
-      EnemyManager.damageEnemy(hitEnemy, WeaponSystem.getDamage());
+
+    const hit = EnemyManager.raycastHit(raycaster);
+    const hitDist = hit ? camera.position.distanceTo(hit.enemy.pos) : Infinity;
+
+    // 壁・クレート(遮蔽物)への着弾距離を調べる(手前にあれば弾を遮る)
+    let wallHit = null;
+    if (wallGroup) {
+      const wallHits = raycaster.intersectObject(wallGroup, true);
+      if (wallHits.length > 0) wallHit = wallHits[0];
+    }
+
+    if (wallHit && wallHit.distance < hitDist) {
+      // 遮蔽物に遮られた: 弾痕のみ残して終了(カバーが機能する)
+      if (wallHit.face) {
+        const worldNormal = wallHit.face.normal.clone()
+          .transformDirection(wallHit.object.matrixWorld)
+          .normalize();
+        spawnBulletHole(wallHit.point, worldNormal);
+      }
       return;
     }
 
-    // 敵に当たらなかった場合、壁への着弾を判定して弾痕を残す
-    if (wallGroup) {
-      const wallHits = raycaster.intersectObject(wallGroup, true);
-      if (wallHits.length > 0) {
-        const hit = wallHits[0];
-        if (hit.face) {
-          const worldNormal = hit.face.normal.clone()
-            .transformDirection(hit.object.matrixWorld)
-            .normalize();
-          spawnBulletHole(hit.point, worldNormal);
-        }
-      }
+    if (hit) {
+      EnemyManager.damageEnemy(hit.enemy, WeaponSystem.getDamage(), hit.isHeadshot);
     }
   }
 
@@ -1918,6 +2098,14 @@ const EnemyManager = (() => {
   // 画面のどこをタップしても発射できるようにする(振り上げジェスチャー廃止に伴う主要な発射手段)
   el.canvasContainer.addEventListener('touchstart', (e) => { e.preventDefault(); attemptFire(); }, { passive: false });
   el.canvasContainer.addEventListener('mousedown', attemptFire);
+
+  // ---- 正面リセット: 現在スマホが向いている方向を新しい「正面」として再校正する ----
+  function recenterDirection() {
+    if (gameState !== 'playing') return;
+    SensorSystem.calibrate();
+  }
+  el.btnRecenter.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); recenterDirection(); }, { passive: false });
+  el.btnRecenter.addEventListener('mousedown', (e) => { e.stopPropagation(); recenterDirection(); });
 
   // ---- プレイヤー被弾・敵撃破コールバック ----
   function onPlayerDamage(dmg) {
@@ -1931,9 +2119,19 @@ const EnemyManager = (() => {
     if (playerHP <= 0) gameOver();
   }
 
-  function onEnemyKilled() {
+  function showKillMessage(text, isHeadshot) {
+    el.killMessage.textContent = text;
+    el.killMessage.classList.remove('show', 'headshot');
+    void el.killMessage.offsetWidth; // reflow でアニメーション再トリガー
+    if (isHeadshot) el.killMessage.classList.add('headshot');
+    el.killMessage.classList.add('show');
+  }
+
+  function onEnemyKilled(enemy, isHeadshot) {
     AudioSystem.playKill();
     updateEnemyCountHud();
+    const label = (enemy && enemy.def && enemy.def.label) || '敵';
+    showKillMessage(isHeadshot ? `ヘッドショット! ${label}を撃破` : `${label}を撃破`, isHeadshot);
     if (EnemyManager.getAliveCount() === 0) missionClear();
   }
 
@@ -2043,11 +2241,44 @@ const EnemyManager = (() => {
       // 視点: センサーの相対姿勢をそのままカメラに適用
       camera.quaternion.copy(SensorSystem.state.quaternion);
 
-      // 移動: 駆け足検出中のみ、ヨー角方向へ前進
-      if (SensorSystem.state.isRunning) {
-        const yawRad = THREE.MathUtils.degToRad(SensorSystem.state.yawDeg);
-        const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yawRad);
-        movePlayer(forward.x * PLAYER_SPEED * dt, forward.z * PLAYER_SPEED * dt);
+      // 移動: 駆け足検出、または矢印キー/WASDで前進・後退・ストレイフ
+      const yawRad = THREE.MathUtils.degToRad(SensorSystem.state.yawDeg);
+      const forwardVec = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yawRad);
+      const rightVec = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yawRad);
+
+      let moveX = 0, moveZ = 0;
+      let speedBudget = 0; // 有効な入力のうち最大の速度を採用する
+
+      if (SensorSystem.state.isRunning || keyState.forward) {
+        moveX += forwardVec.x; moveZ += forwardVec.z;
+        speedBudget = Math.max(speedBudget, PLAYER_SPEED);
+      }
+      if (keyState.back) {
+        moveX -= forwardVec.x; moveZ -= forwardVec.z;
+        speedBudget = Math.max(speedBudget, PLAYER_SPEED);
+      }
+      if (keyState.left) {
+        moveX -= rightVec.x; moveZ -= rightVec.z;
+        speedBudget = Math.max(speedBudget, PLAYER_SPEED);
+      }
+      if (keyState.right) {
+        moveX += rightVec.x; moveZ += rightVec.z;
+        speedBudget = Math.max(speedBudget, PLAYER_SPEED);
+      }
+
+      // 端末を左右に傾ける(ロール)と、正面を向いたまま横に移動する(狭い部屋でも体を回さず操作できる)
+      const roll = SensorSystem.state.rollDeg;
+      if (Math.abs(roll) > STRAFE_ROLL_THRESHOLD) {
+        const t = Math.min(1, (Math.abs(roll) - STRAFE_ROLL_THRESHOLD) / (STRAFE_ROLL_MAX - STRAFE_ROLL_THRESHOLD));
+        const rollStrafe = Math.sign(roll) * t;
+        moveX += rightVec.x * rollStrafe;
+        moveZ += rightVec.z * rollStrafe;
+        speedBudget = Math.max(speedBudget, STRAFE_SPEED);
+      }
+
+      if (moveX !== 0 || moveZ !== 0) {
+        const len = Math.hypot(moveX, moveZ);
+        movePlayer((moveX / len) * speedBudget * dt, (moveZ / len) * speedBudget * dt);
       }
       camera.position.set(playerPos.x, EYE_HEIGHT, playerPos.z);
 
