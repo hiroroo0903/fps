@@ -740,7 +740,10 @@ const SensorSystem = (() => {
   // 常にその場の端末の生の傾きをそのまま使う(ボタンを押す際に指を伸ばしてわずかに下向きに
   // 傾いてしまっても、その傾きが基準として固定されてしまわないようにするため)。
   let calibrationYawQuat = new THREE.Quaternion(); // ヨーのオフセットを打ち消す回転
-  let currentDeviceQuaternion = new THREE.Quaternion();
+  let currentDeviceQuaternion = new THREE.Quaternion();      // 平滑化後(カメラ描画・移動方向に使用)
+  let currentRawDeviceQuaternion = new THREE.Quaternion();   // 平滑化前(校正=正面リセットに使用。遅延なし)
+  let smoothedDeviceQuaternion = new THREE.Quaternion(); // 平滑化後の姿勢(ノイズ対策)
+  let smoothInit = false;
   let zee = new THREE.Vector3(0, 0, 1);
   let euler = new THREE.Euler();
   let q0 = new THREE.Quaternion();
@@ -800,7 +803,7 @@ const SensorSystem = (() => {
     isRunning: false,
     runIntensity: 0, // 足踏みの激しさ(0〜1)。移動速度のスケーリングに使用
     lastRunPeakTime: 0,
-    debugRaw: { alpha: null, beta: null, gamma: null, compass: null }, // デバッグ表示用の生センサー値
+    debugRaw: { alpha: null, beta: null, gamma: null, compass: null, rotMag: null, isRunning: false }, // デバッグ表示用の生センサー値
     debugLastCalibrateYawDeg: null,
     hasReceivedOrientation: false, // 実際のセンサー値を一度でも受信したか
   };
@@ -845,7 +848,21 @@ const SensorSystem = (() => {
     state.debugRaw.compass = hasCompass ? event.webkitCompassHeading : null;
     state.hasReceivedOrientation = true;
 
-    currentDeviceQuaternion = computeDeviceQuaternion(event);
+    const rawQ = computeDeviceQuaternion(event);
+    currentRawDeviceQuaternion.copy(rawQ); // 校正用: 遅延のない最新値をそのまま保持
+
+    // 姿勢を平滑化する(このゲームが前提とする「端末を縦に構える」姿勢は、
+    // コンパスセンサーの精度が落ちやすい角度のため、瞬間的なノイズによる
+    // 大きなブレを抑えるために低域通過フィルタ(slerp)をかける)。
+    // ただしこれはカメラ描画・移動方向にのみ使う。正面リセットの校正には使わない
+    // (平滑化には遅延が伴うため、校正の瞬間は生の値の方が正確なため)。
+    if (!smoothInit) {
+      smoothedDeviceQuaternion.copy(rawQ);
+      smoothInit = true;
+    } else {
+      smoothedDeviceQuaternion.slerp(rawQ, 0.18);
+    }
+    currentDeviceQuaternion = smoothedDeviceQuaternion.clone();
 
     if (!state.calibrated) return;
 
@@ -853,8 +870,20 @@ const SensorSystem = (() => {
   }
 
   function handleMotion(event) {
-    const acc = event.accelerationIncludingGravity;
+    // 重力を含まない加速度(event.acceleration)が使えるならそちらを優先する。
+    // accelerationIncludingGravityは、端末を「傾ける」だけでも重力の投影方向が変わり、
+    // 見かけ上の加速度が生じてしまう(=足踏みしていないのに前進判定されるバグの原因)。
+    const acc = (event.acceleration && event.acceleration.x !== null)
+      ? event.acceleration
+      : event.accelerationIncludingGravity;
     if (!acc || acc.x === null) return;
+
+    // 回転速度(ジャイロ)が大きい間=構え直し・傾け動作の最中は、足踏み判定を抑制する
+    const rot = event.rotationRate;
+    const rotMag = rot
+      ? Math.sqrt((rot.alpha || 0) ** 2 + (rot.beta || 0) ** 2 + (rot.gamma || 0) ** 2)
+      : 0;
+    const isRotatingFast = rotMag > 80; // deg/s
 
     if (!lpInit) {
       lpX = acc.x; lpY = acc.y; lpZ = acc.z; lpInit = true;
@@ -875,7 +904,7 @@ const SensorSystem = (() => {
 
     // --- 駆け足(足踏み)判定: 中程度の周期的ピーク ---
     // ピークの大きさから「足踏みの激しさ」(runIntensity, 0〜1)も算出する
-    if (highMag > RUN_PEAK_THRESHOLD && now - state.lastRunPeakTime > RUN_MIN_INTERVAL_MS) {
+    if (highMag > RUN_PEAK_THRESHOLD && !isRotatingFast && now - state.lastRunPeakTime > RUN_MIN_INTERVAL_MS) {
       state.lastRunPeakTime = now;
       const peakIntensity = Math.min(
         1,
@@ -888,6 +917,8 @@ const SensorSystem = (() => {
     if (!state.isRunning) {
       state.runIntensity *= 0.9; // 走っていない間は緩やかに減衰させる
     }
+    state.debugRaw.rotMag = rotMag;
+    state.debugRaw.isRunning = state.isRunning;
   }
 
   async function requestPermission() {
@@ -919,10 +950,13 @@ const SensorSystem = (() => {
   // 上下の傾き(ピッチ)・左右の傾き(ロール)はここでは固定しない(常に生の値を使う)ため、
   // ボタンを押す際に指を伸ばしてわずかに下向きになっても、視点が変な方向にズレない。
   function calibrate() {
-    const rawYaw = computeYawFromQuaternion(currentDeviceQuaternion);
+    const rawYaw = computeYawFromQuaternion(currentRawDeviceQuaternion);
     calibrationYawQuat.setFromAxisAngle(worldUp, -rawYaw);
     state.calibrated = true;
     state.debugLastCalibrateYawDeg = THREE.MathUtils.radToDeg(rawYaw);
+    // 校正直後は平滑化バッファも今の姿勢にスナップさせ、古い値との混合(遅延)を残さない
+    smoothedDeviceQuaternion.copy(currentRawDeviceQuaternion);
+    currentDeviceQuaternion.copy(currentRawDeviceQuaternion);
     // 次のイベントを待たず、この瞬間の姿勢を即座に反映する
     updateDerivedState(currentDeviceQuaternion);
   }
@@ -2341,6 +2375,8 @@ const AllyManager = (() => {
       `yaw:${fmt(SensorSystem.state.yawDeg)} pitch:${fmt(SensorSystem.state.pitchDeg)} roll:${fmt(SensorSystem.state.rollDeg)}
 ` +
       `最後の校正yaw(生):${fmt(lastCal)}
+` +
+      `回転速度:${fmt(d.rotMag)}deg/s 駆け足判定:${d.isRunning ? 'ON' : 'off'}
 ` +
       `pos: x=${playerPos.x.toFixed(2)} z=${playerPos.z.toFixed(2)}`;
   }
