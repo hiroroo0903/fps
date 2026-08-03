@@ -68,6 +68,27 @@ html, body {
 }
 .subtitle { color: var(--text-dim); margin: 0 0 0.8rem 0; font-size: 0.95rem; }
 
+.mode-select {
+  display: flex; gap: 0.6rem; margin-bottom: 0.4rem;
+}
+.mode-card {
+  background: var(--panel);
+  border: 1px solid var(--panel-line);
+  color: var(--text-main);
+  padding: 0.5rem 1rem;
+  clip-path: polygon(0 0, 100% 0, 92% 100%, 0 100%);
+  display: flex; flex-direction: column; gap: 0.15rem;
+  min-width: 8rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+.mode-card.selected {
+  border-color: var(--safe-green);
+  box-shadow: 0 0 10px rgba(94, 203, 94, 0.3) inset;
+}
+.mode-name { font-size: 0.9rem; font-weight: bold; color: var(--text-main); }
+.mode-desc { font-size: 0.68rem; color: var(--text-dim); }
+
 .weapon-select {
   display: flex; gap: 0.8rem; margin: 0.6rem 0;
 }
@@ -179,6 +200,18 @@ html, body {
   transition: width 0.2s ease, background 0.3s ease;
 }
 .hp-value { font-size: 0.95rem; color: var(--text-main); }
+
+.hud-mates {
+  position: absolute; top: 4.9rem; left: 0.8rem;
+  background: var(--panel);
+  border: 1px solid var(--panel-line);
+  padding: 0.35rem 0.8rem;
+  clip-path: polygon(0 0, 100% 0, 92% 100%, 0 100%);
+  min-width: 9rem;
+}
+.hud-mates.hidden { display: none; }
+.mates-label { font-size: 0.65rem; letter-spacing: 0.15rem; color: var(--text-dim); }
+.mates-value { font-size: 1rem; color: #66aaff; font-weight: bold; }
 .enemy-count-value { font-size: 1.3rem; color: var(--accent); font-weight: bold; }
 
 .minimap {
@@ -263,8 +296,9 @@ html, body {
   pointer-events: auto;
 }
 .strafe-button:active { background: rgba(219, 228, 214, 0.28); border-color: var(--accent); color: var(--accent); }
-.strafe-left { left: 50%; transform: translateX(-4.4rem); }
-.strafe-right { left: 50%; transform: translateX(1.2rem); }
+.strafe-left { left: 50%; transform: translateX(-5.2rem); }
+.strafe-back { left: 50%; transform: translateX(-1.6rem); }
+.strafe-right { left: 50%; transform: translateX(2rem); }
 
 .gameover-title { color: var(--danger); font-size: 2.2rem; letter-spacing: 0.2rem; }
 .clear-title { color: var(--safe-green); font-size: 2.2rem; letter-spacing: 0.2rem; }
@@ -284,6 +318,17 @@ html, body {
 <div id="screen-title" class="screen">
   <h1 class="title">MOTION ASSAULT</h1>
   <p class="subtitle">駆け足で進み、構えて、タップで撃て。</p>
+
+  <div class="mode-select">
+    <button class="mode-card selected" data-mode="solo">
+      <span class="mode-name">ソロミッション</span>
+      <span class="mode-desc">敵10体を全滅させろ</span>
+    </button>
+    <button class="mode-card" data-mode="team">
+      <span class="mode-name">チームバトル</span>
+      <span class="mode-desc">味方4体と5vs5</span>
+    </button>
+  </div>
 
   <div class="weapon-select">
     <button class="weapon-card" id="weapon-m4" data-weapon="m4">
@@ -311,7 +356,8 @@ html, body {
   </div>
 
   <div class="howto">
-    <p>🏃 その場で駆け足 → 前進</p>
+    <p>🏃 その場で駆け足 → 前進(激しく踏むほど速く走れる)</p>
+    <p>◀▼▶ 画面下部のボタン → 後退・横移動</p>
     <p>⌨️ 矢印キー/WASD → 移動(PCでの操作用)</p>
     <p>📱 端末の向き → 視点</p>
     <p>👆 画面をタップ → 発射</p>
@@ -346,6 +392,11 @@ html, body {
     <div id="hp-value" class="hp-value">100</div>
   </div>
 
+  <div id="hud-mates" class="hud-mates hidden">
+    <div class="mates-label">味方</div>
+    <div id="mates-value" class="mates-value">4/4</div>
+  </div>
+
   <div class="hud-top-right">
     <div class="enemy-count-label">残り敵</div>
     <div id="enemy-count" class="enemy-count-value">10</div>
@@ -357,6 +408,7 @@ html, body {
   <div id="kill-message" class="kill-message"></div>
 
   <button id="btn-strafe-left" class="strafe-button strafe-left" aria-label="左に移動">◀</button>
+  <button id="btn-back" class="strafe-button strafe-back" aria-label="後退">▼</button>
   <button id="btn-strafe-right" class="strafe-button strafe-right" aria-label="右に移動">▶</button>
 
   <button id="btn-recenter" class="recenter-button" aria-label="正面をリセット">
@@ -385,7 +437,7 @@ html, body {
 <script>
 
 
-/* ==================== mapdata.js ==================== */
+/* ==================== js/mapdata.js ==================== */
 // ============================================================
 // mapdata.js
 // 固定の手作りマップレイアウト(部屋+通路構成)をグリッドとして定義する。
@@ -520,6 +572,24 @@ const ENEMY_SPAWNS = [
   { type: 'juggernaut', gx: 11, gy: 17, room: 'H' },
 ];
 
+// --- チーム戦モード(疑似5vs5)用のスポーン ---
+// 敵チーム: 東側の部屋(C・F・J・I)に配置し、プレイヤー+味方チームが西から進軍する構図にする
+const TEAM_ENEMY_SPAWNS = [
+  { type: 'grunt',  gx: 17, gy: 3,  room: 'C' },
+  { type: 'bruiser', gx: 16, gy: 11, room: 'F' },
+  { type: 'sniper', gx: 21, gy: 10, room: 'J' },
+  { type: 'gunner', gx: 24, gy: 12, room: 'J' },
+  { type: 'scout',  gx: 22, gy: 3,  room: 'I' },
+];
+
+// 味方チーム(AI、プレイヤーの周囲=スタートルームに配置)
+const TEAM_ALLY_SPAWNS = [
+  { type: 'assault',  gx: 2, gy: 2 },
+  { type: 'scout',    gx: 4, gy: 2 },
+  { type: 'heavy',    gx: 2, gy: 4 },
+  { type: 'marksman', gx: 4, gy: 4 },
+];
+
 function gridToWorld(gx, gy) {
   return {
     x: (gx - GRID_SIZE / 2) * CELL_SIZE + CELL_SIZE / 2,
@@ -540,7 +610,7 @@ function isWalkable(gx, gy) {
 }
 
 
-/* ==================== pathfinding.js ==================== */
+/* ==================== js/pathfinding.js ==================== */
 // ============================================================
 // pathfinding.js
 // グリッドマップ上でのA*経路探索。敵がプレイヤーを追跡する際に使用。
@@ -630,7 +700,7 @@ function findPath(start, goal) {
 }
 
 
-/* ==================== sensor.js ==================== */
+/* ==================== js/sensor.js ==================== */
 // ============================================================
 // sensor.js
 // iPhoneのDeviceOrientation / DeviceMotionを扱うモジュール。
@@ -642,6 +712,7 @@ function findPath(start, goal) {
 const SensorSystem = (() => {
   // ---- 定数(実機テストで調整する前提の初期値) ----
   const RUN_PEAK_THRESHOLD = 1.6;      // 足踏み検出: 加速度変化のピーク閾値 (m/s^2, 高域成分)
+  const RUN_PEAK_INTENSE = 4.5;        // これ以上のピークで「最大強度の足踏み」とみなす
   const RUN_MIN_INTERVAL_MS = 220;     // 足踏みのピーク間の最小間隔
   const RUN_TIMEOUT_MS = 450;          // 直近のピークからこの時間内なら「駆け足中」とみなす
   const LOWPASS_ALPHA = 0.12;          // 重力/姿勢成分を推定する低域通過フィルタ係数
@@ -687,6 +758,7 @@ const SensorSystem = (() => {
     forward: new THREE.Vector3(0, 0, -1), // 移動用の水平前進ベクトル(オイラー角を経由しない)
     right: new THREE.Vector3(1, 0, 0),    // 移動用の水平右ベクトル
     isRunning: false,
+    runIntensity: 0, // 足踏みの激しさ(0〜1)。移動速度のスケーリングに使用
     lastRunPeakTime: 0,
   };
 
@@ -745,10 +817,20 @@ const SensorSystem = (() => {
     const now = performance.now();
 
     // --- 駆け足(足踏み)判定: 中程度の周期的ピーク ---
+    // ピークの大きさから「足踏みの激しさ」(runIntensity, 0〜1)も算出する
     if (highMag > RUN_PEAK_THRESHOLD && now - state.lastRunPeakTime > RUN_MIN_INTERVAL_MS) {
       state.lastRunPeakTime = now;
+      const peakIntensity = Math.min(
+        1,
+        (highMag - RUN_PEAK_THRESHOLD) / (RUN_PEAK_INTENSE - RUN_PEAK_THRESHOLD)
+      );
+      // 急に変わりすぎないよう、直前の値と平滑化する
+      state.runIntensity = state.runIntensity * 0.4 + peakIntensity * 0.6;
     }
     state.isRunning = (now - state.lastRunPeakTime) < RUN_TIMEOUT_MS;
+    if (!state.isRunning) {
+      state.runIntensity *= 0.9; // 走っていない間は緩やかに減衰させる
+    }
   }
 
   async function requestPermission() {
@@ -796,7 +878,7 @@ const SensorSystem = (() => {
 })();
 
 
-/* ==================== audio.js ==================== */
+/* ==================== js/audio.js ==================== */
 // ============================================================
 // audio.js
 // Web Audio APIでプログラム的に効果音を合成する(外部ファイル依存なし)。
@@ -989,7 +1071,7 @@ const AudioSystem = (() => {
 })();
 
 
-/* ==================== weapons.js ==================== */
+/* ==================== js/weapons.js ==================== */
 // ============================================================
 // weapons.js
 // M4風・AK風の2種類の武器。プリミティブ形状によるローポリ・シルエット
@@ -1175,7 +1257,7 @@ const WeaponSystem = (() => {
 })();
 
 
-/* ==================== enemies.js ==================== */
+/* ==================== js/enemies.js ==================== */
 // ============================================================
 // enemies.js
 // 敵10種類の定義とAI。全てパラメータ差別化(攻撃方法/移動速度/HP/索敵範囲)。
@@ -1245,6 +1327,8 @@ const EnemyManager = (() => {
   let onEnemyKilled = null;
   let getPlayerPos = null; // () => THREE.Vector3
   let getPlayerGrid = null; // () => {gx, gy}
+  let getAllies = null;    // () => [{pos, alive, ...}]  (チーム戦モードのみ)
+  let onAllyDamage = null; // (allyRef, dmg) => void      (チーム戦モードのみ)
   let difficultyMult = DIFFICULTY_PRESETS.normal;
 
   function buildMesh(def) {
@@ -1382,6 +1466,8 @@ const EnemyManager = (() => {
     onEnemyKilled = callbacks.onEnemyKilled;
     getPlayerPos = callbacks.getPlayerPos;
     getPlayerGrid = callbacks.getPlayerGrid;
+    getAllies = callbacks.getAllies || null;
+    onAllyDamage = callbacks.onAllyDamage || null;
     difficultyMult = DIFFICULTY_PRESETS[difficultyKey] || DIFFICULTY_PRESETS.normal;
 
     // 再スタート時: 前回の敵・弾のメッシュをシーンから除去
@@ -1391,6 +1477,32 @@ const EnemyManager = (() => {
     enemies = [];
     projectiles = [];
     spawns.forEach(spawn);
+  }
+
+  // 最も近い攻撃対象を選ぶ(チーム戦モードでは味方も対象になる。通常モードでは常にプレイヤー)
+  function pickTarget(enemyPos) {
+    const playerPos = getPlayerPos();
+    let best = { pos: playerPos, kind: 'player', ref: null };
+    let bestDist = enemyPos.distanceTo(playerPos);
+    if (getAllies) {
+      getAllies().forEach((a) => {
+        if (!a.alive) return;
+        const d = enemyPos.distanceTo(a.pos);
+        if (d < bestDist) {
+          bestDist = d;
+          best = { pos: a.pos, kind: 'ally', ref: a };
+        }
+      });
+    }
+    return best;
+  }
+
+  function damageTarget(target, dmg) {
+    if (target.kind === 'player') {
+      if (onPlayerDamage) onPlayerDamage(dmg);
+    } else if (target.kind === 'ally') {
+      if (onAllyDamage) onAllyDamage(target.ref, dmg);
+    }
   }
 
   function damageEnemy(enemy, amount, isHeadshot) {
@@ -1415,7 +1527,7 @@ const EnemyManager = (() => {
     }
   }
 
-  function spawnProjectile(enemy) {
+  function spawnProjectile(enemy, target) {
     const geo = new THREE.SphereGeometry(0.12, 8, 8);
     const mat = new THREE.MeshStandardMaterial({
       color: 0xff5522, emissive: 0xff3300, emissiveIntensity: 2.0,
@@ -1426,8 +1538,7 @@ const EnemyManager = (() => {
     mesh.position.copy(origin);
     scene.add(mesh);
 
-    const target = getPlayerPos();
-    const dir = new THREE.Vector3().subVectors(target, origin).normalize();
+    const dir = new THREE.Vector3().subVectors(target.pos, origin).normalize();
 
     projectiles.push({
       mesh,
@@ -1435,22 +1546,36 @@ const EnemyManager = (() => {
       speed: enemy.def.projectileSpeed,
       dmg: enemy.def.dmg,
       life: 4.0,
+      targetKind: target.kind,
+      targetRef: target.ref,
     });
   }
 
   function updateProjectiles(dt) {
-    const playerPos = getPlayerPos();
     for (let i = projectiles.length - 1; i >= 0; i--) {
       const p = projectiles[i];
       p.mesh.position.addScaledVector(p.dir, p.speed * dt);
       p.life -= dt;
 
-      const distToPlayer = p.mesh.position.distanceTo(playerPos);
-      if (distToPlayer < 0.9) {
-        if (onPlayerDamage) onPlayerDamage(p.dmg);
-        scene.remove(p.mesh);
-        projectiles.splice(i, 1);
-        continue;
+      let targetPos = null;
+      if (p.targetKind === 'player') {
+        targetPos = getPlayerPos();
+      } else if (p.targetRef && p.targetRef.alive) {
+        targetPos = p.targetRef.pos;
+      }
+
+      if (targetPos) {
+        const dist = p.mesh.position.distanceTo(targetPos);
+        if (dist < 0.9) {
+          if (p.targetKind === 'player') {
+            if (onPlayerDamage) onPlayerDamage(p.dmg);
+          } else if (onAllyDamage) {
+            onAllyDamage(p.targetRef, p.dmg);
+          }
+          scene.remove(p.mesh);
+          projectiles.splice(i, 1);
+          continue;
+        }
       }
       if (p.life <= 0) {
         scene.remove(p.mesh);
@@ -1505,12 +1630,10 @@ const EnemyManager = (() => {
   }
 
   function update(dt) {
-    const playerPos = getPlayerPos();
-    const playerGrid = getPlayerGrid();
-
     enemies.forEach((enemy) => {
       if (!enemy.alive) return;
-      const distToPlayer = enemy.pos.distanceTo(playerPos);
+      const target = pickTarget(enemy.pos);
+      const distToTarget = enemy.pos.distanceTo(target.pos);
       const def = enemy.def;
 
       if (enemy.attackCooldown > 0) enemy.attackCooldown -= dt;
@@ -1535,7 +1658,7 @@ const EnemyManager = (() => {
           }
           moveAlongPath(enemy, dt, 0.45); // 巡回中はゆっくり歩く
 
-          if (distToPlayer < def.detectRange) {
+          if (distToTarget < def.detectRange) {
             enemy.state = 'chase';
             enemy.path = [];
           }
@@ -1543,12 +1666,12 @@ const EnemyManager = (() => {
         }
         case 'chase': {
           setCoreColor(enemy, 0xffff00);
-          if (distToPlayer > def.detectRange * 1.4) {
+          if (distToTarget > def.detectRange * 1.4) {
             enemy.state = 'idle';
             enemy.path = [];
             break;
           }
-          if (distToPlayer <= def.atkRange) {
+          if (distToTarget <= def.atkRange) {
             enemy.state = def.attack === 'ranged' ? 'telegraph' : 'melee_range';
             enemy.telegraphTimer = def.telegraphMs || 0;
             break;
@@ -1558,7 +1681,8 @@ const EnemyManager = (() => {
           if (enemy.pathTimer <= 0) {
             enemy.pathTimer = 0.5;
             const startGrid = worldToGrid(enemy.pos.x, enemy.pos.z);
-            enemy.path = findPath(startGrid, playerGrid);
+            const targetGrid = worldToGrid(target.pos.x, target.pos.z);
+            enemy.path = findPath(startGrid, targetGrid);
           }
           moveAlongPath(enemy, dt);
           break;
@@ -1566,26 +1690,26 @@ const EnemyManager = (() => {
         case 'melee_range': {
           setCoreColor(enemy, 0xff2222);
           animateLegs(enemy, dt, false);
-          if (distToPlayer > def.atkRange * 1.2) {
+          if (distToTarget > def.atkRange * 1.2) {
             enemy.state = 'chase';
             break;
           }
           if (enemy.attackCooldown <= 0) {
-            if (onPlayerDamage) onPlayerDamage(def.dmg);
+            damageTarget(target, def.dmg);
             enemy.attackCooldown = 1.0;
           }
           break;
         }
         case 'telegraph': {
-          setCoreColor(enemy, 0xff8800); // 予兆: オレンジに発光 → プレイヤーは視認して先制撃破できる
+          setCoreColor(enemy, 0xff8800); // 予兆: オレンジに発光 → 先制撃破すれば回避できる
           animateLegs(enemy, dt, false);
-          if (distToPlayer > def.atkRange * 1.5) {
+          if (distToTarget > def.atkRange * 1.5) {
             enemy.state = 'chase';
             break;
           }
           enemy.telegraphTimer -= dt * 1000;
           if (enemy.telegraphTimer <= 0) {
-            spawnProjectile(enemy);
+            spawnProjectile(enemy, target);
             enemy.state = 'chase'; // 発射後は再度距離を計って追跡/再攻撃
             enemy.attackCooldown = 0.3;
           }
@@ -1627,13 +1751,322 @@ const EnemyManager = (() => {
       .map(e => ({ x: e.pos.x, z: e.pos.z, alert: e.state !== 'idle' }));
   }
 
+  // 味方AI(allies.js)が攻撃対象を選ぶための、生存中の敵オブジェクト一覧
+  function getAliveEnemies() {
+    return enemies.filter(e => e.alive);
+  }
+
   return {
     init, update, damageEnemy, raycastHit, getAliveCount, getTotalCount, getMinimapData,
+    getAliveEnemies,
   };
 })();
 
 
-/* ==================== game.js ==================== */
+/* ==================== js/allies.js ==================== */
+// ============================================================
+// allies.js
+// チーム戦モード(疑似5vs5)用の味方AI。プレイヤーに追従しつつ、
+// 索敵範囲内に敵がいれば自動で交戦する。プレイヤーは操作しない。
+// ============================================================
+
+const ALLY_TYPES = {
+  assault: {
+    label: 'アサルト', hp: 70, speed: 2.3, dmg: 14,
+    atkRange: 9, detectRange: 16, cooldown: 0.9, color: 0x3388ff, size: 1.0,
+  },
+  scout: {
+    label: 'スカウト', hp: 45, speed: 3.4, dmg: 10,
+    atkRange: 7, detectRange: 18, cooldown: 0.7, color: 0x33bbff, size: 0.85,
+  },
+  heavy: {
+    label: 'ヘヴィ', hp: 130, speed: 1.2, dmg: 20,
+    atkRange: 8, detectRange: 14, cooldown: 1.2, color: 0x2255aa, size: 1.4,
+  },
+  marksman: {
+    label: 'マークスマン', hp: 50, speed: 1.4, dmg: 24,
+    atkRange: 15, detectRange: 20, cooldown: 1.4, color: 0x66aaff, size: 0.9,
+  },
+};
+
+const AllyManager = (() => {
+  let scene = null;
+  let allies = [];
+  let tracers = [];
+  let getPlayerPos = null;
+  let onAllyKilled = null;
+
+  const FOLLOW_LEASH = 6.5; // プレイヤーからこの距離以上離れたら近づく
+
+  function buildMesh(def) {
+    const s = def.size;
+    const group = new THREE.Group();
+    const bodyMat = new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.6, metalness: 0.15 });
+    const gunMat = new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.5, metalness: 0.4 });
+    const coreMat = new THREE.MeshStandardMaterial({
+      color: 0x3388ff, emissive: 0x1155aa, emissiveIntensity: 1.2, roughness: 0.3,
+    });
+
+    const legGeo = new THREE.BoxGeometry(0.15 * s, 0.5 * s, 0.17 * s);
+    const legLPivot = new THREE.Group();
+    legLPivot.position.set(-0.13 * s, 0.5 * s, 0);
+    const legL = new THREE.Mesh(legGeo, bodyMat);
+    legL.position.set(0, -0.25 * s, 0);
+    legLPivot.add(legL);
+
+    const legRPivot = new THREE.Group();
+    legRPivot.position.set(0.13 * s, 0.5 * s, 0);
+    const legR = new THREE.Mesh(legGeo, bodyMat);
+    legR.position.set(0, -0.25 * s, 0);
+    legRPivot.add(legR);
+    group.add(legLPivot, legRPivot);
+
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.36 * s, 0.48 * s, 0.24 * s), bodyMat);
+    torso.position.set(0, 0.74 * s, 0);
+    group.add(torso);
+
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.15 * s, 8, 8), bodyMat);
+    head.position.set(0, 1.08 * s, 0);
+    group.add(head);
+
+    const core = new THREE.Mesh(new THREE.SphereGeometry(0.05 * s, 6, 6), coreMat);
+    core.position.set(0, 1.09 * s, 0.13 * s);
+    group.add(core);
+
+    const armGeo = new THREE.BoxGeometry(0.12 * s, 0.4 * s, 0.12 * s);
+    const armL = new THREE.Mesh(armGeo, bodyMat);
+    armL.position.set(-0.26 * s, 0.7 * s, 0);
+    armL.rotation.z = 0.2;
+    group.add(armL);
+
+    const armR = new THREE.Mesh(armGeo, bodyMat);
+    armR.position.set(0.2 * s, 0.86 * s, 0.14 * s);
+    armR.rotation.x = -1.15;
+    group.add(armR);
+
+    const gunGroup = new THREE.Group();
+    const gunBody = new THREE.Mesh(new THREE.BoxGeometry(0.08 * s, 0.08 * s, 0.5 * s), gunMat);
+    gunBody.position.set(0, 0, -0.22 * s);
+    gunGroup.add(gunBody);
+    const gunMag = new THREE.Mesh(new THREE.BoxGeometry(0.05 * s, 0.16 * s, 0.06 * s), gunMat);
+    gunMag.position.set(0, -0.1 * s, -0.05 * s);
+    gunGroup.add(gunMag);
+    gunGroup.position.set(0.2 * s, 0.56 * s, 0.36 * s);
+    group.add(gunGroup);
+
+    group.userData.core = core;
+    group.userData.coreMat = coreMat;
+    group.userData.legLPivot = legLPivot;
+    group.userData.legRPivot = legRPivot;
+    group.userData.walkPhase = Math.random() * Math.PI * 2;
+
+    return group;
+  }
+
+  function spawn(spawnDef) {
+    const def = ALLY_TYPES[spawnDef.type];
+    const world = gridToWorld(spawnDef.gx, spawnDef.gy);
+    const mesh = buildMesh(def);
+    mesh.position.set(world.x, 0, world.z);
+    scene.add(mesh);
+
+    const ally = {
+      type: spawnDef.type,
+      def,
+      mesh,
+      hp: def.hp,
+      maxHp: def.hp,
+      pos: new THREE.Vector3(world.x, 0, world.z),
+      path: [],
+      pathTimer: 0,
+      attackCooldown: 0,
+      alive: true,
+    };
+    allies.push(ally);
+    return ally;
+  }
+
+  function init(threeScene, spawns, callbacks) {
+    scene = threeScene;
+    getPlayerPos = callbacks.getPlayerPos;
+    onAllyKilled = callbacks.onAllyKilled || null;
+
+    allies.forEach(a => { if (a.mesh) scene.remove(a.mesh); });
+    tracers.forEach(t => { if (t.mesh) scene.remove(t.mesh); });
+    allies = [];
+    tracers = [];
+    spawns.forEach(spawn);
+  }
+
+  function damageAlly(ally, amount) {
+    if (!ally.alive) return;
+    ally.hp = Math.max(0, ally.hp - amount);
+    if (ally.hp <= 0) {
+      ally.alive = false;
+      scene.remove(ally.mesh);
+      if (onAllyKilled) onAllyKilled(ally);
+    }
+  }
+
+  function setCoreColor(ally, hex) {
+    ally.mesh.userData.coreMat.color.setHex(hex);
+    ally.mesh.userData.coreMat.emissive.setHex(hex);
+  }
+
+  function animateLegs(ally, dt, walking) {
+    const ud = ally.mesh.userData;
+    if (walking) {
+      ud.walkPhase += dt * 9 * (ally.def.speed / 2.0 + 0.4);
+      const swing = Math.sin(ud.walkPhase) * 0.55;
+      ud.legLPivot.rotation.x = swing;
+      ud.legRPivot.rotation.x = -swing;
+    } else {
+      ud.legLPivot.rotation.x *= 0.8;
+      ud.legRPivot.rotation.x *= 0.8;
+    }
+  }
+
+  function moveAlongPath(ally, dt) {
+    if (ally.path.length === 0) {
+      animateLegs(ally, dt, false);
+      return;
+    }
+    const next = ally.path[0];
+    const nw = gridToWorld(next.gx, next.gy);
+    const target = new THREE.Vector3(nw.x, 0, nw.z);
+    const dir = new THREE.Vector3().subVectors(target, ally.pos);
+    const dist = dir.length();
+    const step = ally.def.speed * dt;
+
+    if (dist <= step) {
+      ally.pos.copy(target);
+      ally.path.shift();
+    } else {
+      dir.normalize();
+      ally.pos.addScaledVector(dir, step);
+      ally.mesh.rotation.y = Math.atan2(dir.x, dir.z);
+    }
+    ally.mesh.position.set(ally.pos.x, 0, ally.pos.z);
+    animateLegs(ally, dt, true);
+  }
+
+  function spawnTracer(fromPos, toPos) {
+    const dir = new THREE.Vector3().subVectors(toPos, fromPos);
+    const len = Math.max(0.1, dir.length());
+    const geo = new THREE.CylinderGeometry(0.02, 0.02, len, 6);
+    const mat = new THREE.MeshBasicMaterial({ color: 0x77ccff, transparent: true, opacity: 0.8 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.copy(fromPos).lerp(toPos, 0.5);
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+    scene.add(mesh);
+    tracers.push({ mesh, mat, life: 0.12, maxLife: 0.12 });
+  }
+
+  function updateTracers(dt) {
+    for (let i = tracers.length - 1; i >= 0; i--) {
+      const t = tracers[i];
+      t.life -= dt;
+      t.mat.opacity = Math.max(0, t.life / t.maxLife) * 0.8;
+      if (t.life <= 0) {
+        scene.remove(t.mesh);
+        tracers.splice(i, 1);
+      }
+    }
+  }
+
+  function update(dt) {
+    const playerPos = getPlayerPos();
+    const enemyList = EnemyManager.getAliveEnemies();
+
+    allies.forEach((ally) => {
+      if (!ally.alive) return;
+      const def = ally.def;
+      if (ally.attackCooldown > 0) ally.attackCooldown -= dt;
+
+      // 最も近い生存中の敵を探す
+      let nearestEnemy = null;
+      let nearestDist = Infinity;
+      enemyList.forEach((e) => {
+        if (!e.alive) return;
+        const d = ally.pos.distanceTo(e.pos);
+        if (d < nearestDist) { nearestDist = d; nearestEnemy = e; }
+      });
+
+      if (nearestEnemy && nearestDist < def.detectRange) {
+        if (nearestDist <= def.atkRange) {
+          // 交戦: その場から射撃
+          setCoreColor(ally, 0xff8800);
+          animateLegs(ally, dt, false);
+          ally.mesh.rotation.y = Math.atan2(
+            nearestEnemy.pos.x - ally.pos.x,
+            nearestEnemy.pos.z - ally.pos.z
+          );
+          if (ally.attackCooldown <= 0) {
+            EnemyManager.damageEnemy(nearestEnemy, def.dmg, false);
+            const from = ally.pos.clone(); from.y = def.size * 0.65;
+            const to = nearestEnemy.pos.clone(); to.y = (nearestEnemy.def.size || 1) * 0.65;
+            spawnTracer(from, to);
+            ally.attackCooldown = def.cooldown;
+          }
+        } else {
+          // 射程外: 敵に向かって前進
+          setCoreColor(ally, 0xffdd55);
+          ally.pathTimer -= dt;
+          if (ally.pathTimer <= 0 || ally.path.length === 0) {
+            ally.pathTimer = 0.5;
+            const startGrid = worldToGrid(ally.pos.x, ally.pos.z);
+            const targetGrid = worldToGrid(nearestEnemy.pos.x, nearestEnemy.pos.z);
+            ally.path = findPath(startGrid, targetGrid);
+          }
+          moveAlongPath(ally, dt);
+        }
+      } else {
+        // 敵を検知していない: プレイヤーに追従(離れすぎたときのみ動く)
+        setCoreColor(ally, 0x3388ff);
+        const distToPlayer = ally.pos.distanceTo(playerPos);
+        if (distToPlayer > FOLLOW_LEASH) {
+          ally.pathTimer -= dt;
+          if (ally.pathTimer <= 0 || ally.path.length === 0) {
+            ally.pathTimer = 0.6;
+            const startGrid = worldToGrid(ally.pos.x, ally.pos.z);
+            const targetGrid = worldToGrid(playerPos.x, playerPos.z);
+            ally.path = findPath(startGrid, targetGrid);
+          }
+          moveAlongPath(ally, dt);
+        } else {
+          ally.path = [];
+          animateLegs(ally, dt, false);
+        }
+      }
+    });
+
+    updateTracers(dt);
+  }
+
+  function getAliveCount() {
+    return allies.filter(a => a.alive).length;
+  }
+
+  function getTotalCount() {
+    return allies.length;
+  }
+
+  // enemies.jsの索敵対象リストとして渡す(pos/aliveを持つオブジェクト配列であればよい)
+  function getAllAllies() {
+    return allies;
+  }
+
+  function getMinimapData() {
+    return allies.filter(a => a.alive).map(a => ({ x: a.pos.x, z: a.pos.z }));
+  }
+
+  return {
+    init, update, damageAlly, getAliveCount, getTotalCount, getAllAllies, getMinimapData,
+  };
+})();
+
+
+/* ==================== js/game.js ==================== */
 // ============================================================
 // game.js
 // メインのゲームロジック。Three.jsのシーン構築、状態遷移、
@@ -1641,7 +2074,9 @@ const EnemyManager = (() => {
 // ============================================================
 
 (() => {
-  const PLAYER_SPEED = 4.6;      // 駆け足検出中の前進速度 (units/sec)
+  const PLAYER_SPEED = 4.6;      // 矢印キー/後退・横移動ボタンの基準速度 (units/sec)
+  const RUN_SPEED_MIN = 3.2;     // 足踏みが弱いときの前進速度
+  const RUN_SPEED_MAX = 6.8;     // 足踏みが激しいときの前進速度
   const PLAYER_RADIUS = 0.35;    // 衝突判定用の簡易半径
   const EYE_HEIGHT = 1.65;
   const WALL_HEIGHT = 3.2;
@@ -1659,6 +2094,7 @@ const EnemyManager = (() => {
     btnFire: document.getElementById('btn-fire'),
     btnRecenter: document.getElementById('btn-recenter'),
     btnStrafeLeft: document.getElementById('btn-strafe-left'),
+    btnBack: document.getElementById('btn-back'),
     btnStrafeRight: document.getElementById('btn-strafe-right'),
     btnRestartOver: document.getElementById('btn-restart-over'),
     btnRestartClear: document.getElementById('btn-restart-clear'),
@@ -1670,6 +2106,9 @@ const EnemyManager = (() => {
     killMessage: document.getElementById('kill-message'),
     weaponCards: document.querySelectorAll('.weapon-card'),
     diffCards: document.querySelectorAll('.diff-card'),
+    modeCards: document.querySelectorAll('.mode-card'),
+    hudMates: document.getElementById('hud-mates'),
+    matesValue: document.getElementById('mates-value'),
     canvasContainer: document.getElementById('canvas-container'),
     gameoverStats: document.getElementById('gameover-stats'),
     clearStats: document.getElementById('clear-stats'),
@@ -1677,6 +2116,7 @@ const EnemyManager = (() => {
 
   let selectedWeapon = 'ak';
   let selectedDifficulty = 'normal';
+  let selectedMode = 'solo'; // 'solo' | 'team'
   let gameState = 'title'; // title | playing | gameover | clear
   let sceneBuilt = false;
 
@@ -1734,6 +2174,15 @@ const EnemyManager = (() => {
       el.diffCards.forEach(c => c.classList.remove('selected'));
       card.classList.add('selected');
       selectedDifficulty = card.dataset.difficulty;
+    });
+  });
+
+  // ---- モード選択UI ----
+  el.modeCards.forEach(card => {
+    card.addEventListener('click', () => {
+      el.modeCards.forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+      selectedMode = card.dataset.mode;
     });
   });
 
@@ -1825,6 +2274,17 @@ const EnemyManager = (() => {
       ctx.arc(p.mx, p.my, e.alert ? 3.2 : 2.4, 0, Math.PI * 2);
       ctx.fill();
     });
+
+    // 味方(チーム戦モードのみ)
+    if (selectedMode === 'team') {
+      AllyManager.getMinimapData().forEach((a) => {
+        const p = toMap(a.x, a.z);
+        ctx.fillStyle = '#3388ff';
+        ctx.beginPath();
+        ctx.arc(p.mx, p.my, 2.6, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
 
     // プレイヤー(向きを示す三角形付き)。実際の移動方向(forwardベクトル)と完全に一致させる
     const pp = toMap(playerPos.x, playerPos.z);
@@ -2244,6 +2704,7 @@ const EnemyManager = (() => {
     btnEl.addEventListener('mouseleave', release);
   }
   bindHoldButton(el.btnStrafeLeft, 'left');
+  bindHoldButton(el.btnBack, 'back');
   bindHoldButton(el.btnStrafeRight, 'right');
 
   // ---- プレイヤー被弾・敵撃破コールバック ----
@@ -2276,6 +2737,17 @@ const EnemyManager = (() => {
     if (EnemyManager.getAliveCount() === 0) missionClear();
   }
 
+  function onAllyKilled(ally) {
+    updateMatesHud();
+    const label = (ally && ally.def && ally.def.label) || '味方';
+    showKillMessage(`${label}(味方)がやられた…`, false);
+  }
+
+  function updateMatesHud() {
+    if (selectedMode !== 'team') return;
+    el.matesValue.textContent = `${AllyManager.getAliveCount()}/${AllyManager.getTotalCount()}`;
+  }
+
   function updateHpHud() {
     const pct = Math.max(0, playerHP / PLAYER_MAX_HP) * 100;
     el.hpFill.style.width = pct + '%';
@@ -2300,7 +2772,8 @@ const EnemyManager = (() => {
     AudioSystem.playGameOver();
     const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
     const diffLabel = DIFFICULTY_PRESETS[selectedDifficulty]?.label || selectedDifficulty;
-    el.gameoverStats.textContent = `難易度: ${diffLabel}   撃破数: ${EnemyManager.getTotalCount() - EnemyManager.getAliveCount()} / ${EnemyManager.getTotalCount()}   経過時間: ${elapsed}秒`;
+    const matesInfo = selectedMode === 'team' ? `   生存味方: ${AllyManager.getAliveCount()}/${AllyManager.getTotalCount()}` : '';
+    el.gameoverStats.textContent = `難易度: ${diffLabel}   撃破数: ${EnemyManager.getTotalCount() - EnemyManager.getAliveCount()} / ${EnemyManager.getTotalCount()}   経過時間: ${elapsed}秒${matesInfo}`;
     showScreen(el.gameover);
   }
 
@@ -2309,7 +2782,8 @@ const EnemyManager = (() => {
     AudioSystem.playClear();
     const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
     const diffLabel = DIFFICULTY_PRESETS[selectedDifficulty]?.label || selectedDifficulty;
-    el.clearStats.textContent = `難易度: ${diffLabel}   クリアタイム: ${elapsed}秒`;
+    const matesInfo = selectedMode === 'team' ? `   生存味方: ${AllyManager.getAliveCount()}/${AllyManager.getTotalCount()}` : '';
+    el.clearStats.textContent = `難易度: ${diffLabel}   クリアタイム: ${elapsed}秒${matesInfo}`;
     showScreen(el.clear);
   }
 
@@ -2350,13 +2824,33 @@ const EnemyManager = (() => {
     // 武器セット
     WeaponSystem.setWeapon(selectedWeapon);
 
-    // 敵リセット(選択された難易度を反映)
-    EnemyManager.init(scene, ENEMY_SPAWNS, {
-      onPlayerDamage,
-      onEnemyKilled,
-      getPlayerPos: () => playerPos,
-      getPlayerGrid: () => worldToGrid(playerPos.x, playerPos.z),
-    }, selectedDifficulty);
+    if (selectedMode === 'team') {
+      // チーム戦: 敵チーム5体 + 味方AI4体
+      EnemyManager.init(scene, TEAM_ENEMY_SPAWNS, {
+        onPlayerDamage,
+        onEnemyKilled,
+        getPlayerPos: () => playerPos,
+        getPlayerGrid: () => worldToGrid(playerPos.x, playerPos.z),
+        getAllies: () => AllyManager.getAllAllies(),
+        onAllyDamage: (allyRef, dmg) => AllyManager.damageAlly(allyRef, dmg),
+      }, selectedDifficulty);
+      AllyManager.init(scene, TEAM_ALLY_SPAWNS, {
+        getPlayerPos: () => playerPos,
+        onAllyKilled,
+      });
+      el.hudMates.classList.remove('hidden');
+      updateMatesHud();
+    } else {
+      // ソロミッション: 敵10体
+      EnemyManager.init(scene, ENEMY_SPAWNS, {
+        onPlayerDamage,
+        onEnemyKilled,
+        getPlayerPos: () => playerPos,
+        getPlayerGrid: () => worldToGrid(playerPos.x, playerPos.z),
+      }, selectedDifficulty);
+      AllyManager.init(scene, [], { getPlayerPos: () => playerPos }); // 味方なしで初期化(前回の残骸をクリア)
+      el.hudMates.classList.add('hidden');
+    }
     updateEnemyCountHud();
 
     // 開始時の向きを正面として校正
@@ -2391,7 +2885,13 @@ const EnemyManager = (() => {
       let moveX = 0, moveZ = 0;
       let speedBudget = 0; // 有効な入力のうち最大の速度を採用する
 
-      if (SensorSystem.state.isRunning || keyState.forward) {
+      if (SensorSystem.state.isRunning) {
+        moveX += forwardVec.x; moveZ += forwardVec.z;
+        // 足踏みが激しいほど速く走れる
+        const runSpeed = RUN_SPEED_MIN + (RUN_SPEED_MAX - RUN_SPEED_MIN) * SensorSystem.state.runIntensity;
+        speedBudget = Math.max(speedBudget, runSpeed);
+      }
+      if (keyState.forward) {
         moveX += forwardVec.x; moveZ += forwardVec.z;
         speedBudget = Math.max(speedBudget, PLAYER_SPEED);
       }
@@ -2416,6 +2916,10 @@ const EnemyManager = (() => {
 
       WeaponSystem.update(dt);
       EnemyManager.update(dt);
+      if (selectedMode === 'team') {
+        AllyManager.update(dt);
+        updateMatesHud();
+      }
       updateBulletHoles();
       renderMinimap();
     }
@@ -2428,6 +2932,5 @@ const EnemyManager = (() => {
   animate();
 })();
 
-</script>
-</body>
+</script></body>
 </html>
