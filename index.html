@@ -181,6 +181,14 @@ html, body {
 .hp-value { font-size: 0.95rem; color: var(--text-main); }
 .enemy-count-value { font-size: 1.3rem; color: var(--accent); font-weight: bold; }
 
+.minimap {
+  position: absolute; top: 0.8rem; left: 50%;
+  transform: translateX(-50%);
+  background: rgba(10, 14, 10, 0.6);
+  border: 1px solid var(--panel-line);
+  border-radius: 4px;
+}
+
 .damage-flash {
   position: absolute; inset: 0;
   background: radial-gradient(ellipse at center, rgba(255,0,0,0) 40%, rgba(255,0,0,0.35) 100%);
@@ -328,6 +336,8 @@ html, body {
     <div class="enemy-count-label">残り敵</div>
     <div id="enemy-count" class="enemy-count-value">10</div>
   </div>
+
+  <canvas id="minimap" class="minimap" width="130" height="130"></canvas>
 
   <div id="damage-flash" class="damage-flash"></div>
   <div id="kill-message" class="kill-message"></div>
@@ -656,7 +666,10 @@ const SensorSystem = (() => {
     quaternion: new THREE.Quaternion(), // 校正済み・相対姿勢
     yawDeg: 0,
     pitchDeg: 0,
-    rollDeg: 0, // 左右の傾き(ストレイフ操作に使用)
+    rollDeg: 0, // 左右の傾き(参考値、表示用)
+    forward: new THREE.Vector3(0, 0, -1), // 移動用の水平前進ベクトル(オイラー角を経由しない)
+    right: new THREE.Vector3(1, 0, 0),    // 移動用の水平右ベクトル
+    tiltRoll: 0, // 端末の左右の傾き強度(-1〜1程度)。ストレイフ操作に使用
     isRunning: false,
     lastRunPeakTime: 0,
   };
@@ -673,11 +686,28 @@ const SensorSystem = (() => {
     const rel = calibrationInverse.clone().multiply(currentDeviceQuaternion);
     state.quaternion.copy(rel);
 
-    // HUD/判定用にyaw・pitch・rollを抽出(YXZ順)
+    // 表示・参考用にyaw・pitch・rollを抽出(YXZ順)。移動方向の計算には使わない
+    // (オイラー角はピッチ・ロールが同時に大きいと数値が結合してズレるため)
     const e = new THREE.Euler().setFromQuaternion(rel, 'YXZ');
     state.yawDeg = THREE.MathUtils.radToDeg(e.y);
     state.pitchDeg = THREE.MathUtils.radToDeg(e.x);
     state.rollDeg = THREE.MathUtils.radToDeg(e.z);
+
+    // 移動方向: 実際の3Dベクトル(カメラの向きと完全に同じ計算式)を水平面に投影して求める。
+    // カメラの見た目の向きと、走る方向・ストレイフ方向が必ず一致するようにするため。
+    const fwd3 = new THREE.Vector3(0, 0, -1).applyQuaternion(rel);
+    const right3 = new THREE.Vector3(1, 0, 0).applyQuaternion(rel);
+
+    // 端末の左右の傾き(ストレイフ)の強さは、水平投影する「前」のright3のY成分から求める
+    state.tiltRoll = right3.y;
+
+    fwd3.y = 0;
+    if (fwd3.lengthSq() > 1e-6) fwd3.normalize(); else fwd3.set(0, 0, -1);
+    right3.y = 0;
+    if (right3.lengthSq() > 1e-6) right3.normalize(); else right3.set(1, 0, 0);
+
+    state.forward.copy(fwd3);
+    state.right.copy(right3);
   }
 
   function handleMotion(event) {
@@ -740,6 +770,9 @@ const SensorSystem = (() => {
     state.yawDeg = 0;
     state.pitchDeg = 0;
     state.rollDeg = 0;
+    state.forward.set(0, 0, -1);
+    state.right.set(1, 0, 0);
+    state.tiltRoll = 0;
     state.calibrated = true;
   }
 
@@ -1575,8 +1608,15 @@ const EnemyManager = (() => {
     return enemies.length;
   }
 
+  // ミニマップ描画用: 生存中の敵の位置と状態(索敵中かどうか)を返す
+  function getMinimapData() {
+    return enemies
+      .filter(e => e.alive)
+      .map(e => ({ x: e.pos.x, z: e.pos.z, alert: e.state !== 'idle' }));
+  }
+
   return {
-    init, update, damageEnemy, raycastHit, getAliveCount, getTotalCount,
+    init, update, damageEnemy, raycastHit, getAliveCount, getTotalCount, getMinimapData,
   };
 })();
 
@@ -1591,8 +1631,8 @@ const EnemyManager = (() => {
 (() => {
   const PLAYER_SPEED = 4.6;      // 駆け足検出中の前進速度 (units/sec)
   const STRAFE_SPEED = 3.6;      // 傾きによる横移動速度 (units/sec)
-  const STRAFE_ROLL_THRESHOLD = 14; // ストレイフが働き始める傾き角度(度)
-  const STRAFE_ROLL_MAX = 40;       // この角度でストレイフ速度が最大になる
+  const STRAFE_DEADZONE = 0.05;  // ストレイフが働き始める傾き強度(0〜1、tiltRollの値)
+  const STRAFE_FULL = 0.4;       // この強度でストレイフ速度が最大になる
   const PLAYER_RADIUS = 0.35;    // 衝突判定用の簡易半径
   const EYE_HEIGHT = 1.65;
   const WALL_HEIGHT = 3.2;
@@ -1614,6 +1654,7 @@ const EnemyManager = (() => {
     hpFill: document.getElementById('hp-bar-fill'),
     hpValue: document.getElementById('hp-value'),
     enemyCount: document.getElementById('enemy-count'),
+    minimapCanvas: document.getElementById('minimap'),
     damageFlash: document.getElementById('damage-flash'),
     killMessage: document.getElementById('kill-message'),
     weaponCards: document.querySelectorAll('.weapon-card'),
@@ -1640,6 +1681,15 @@ const EnemyManager = (() => {
   let playerHP = PLAYER_MAX_HP;
   let lastFireTime = 0;
   let startTime = 0;
+
+  // ---- 振動フィードバック(Vibration API) ----
+  // 注意: iOS Safariは仕様上Vibration APIに対応していないため、iPhone実機では無音・無振動のまま
+  // 安全に何もしない(将来的な対応や他ブラウザでの利用に備えて実装は残す)。
+  function vibrate(pattern) {
+    if (navigator.vibrate) {
+      try { navigator.vibrate(pattern); } catch (e) { /* 何もしない */ }
+    }
+  }
 
   // ---- 武器選択UI ----
   // ---- キーボード操作(矢印キー/WASD、PCでのテストや補助操作用) ----
@@ -1710,6 +1760,7 @@ const EnemyManager = (() => {
     buildColumns();
     buildCrates();
     buildCeilingLights();
+    buildMinimapStatic();
     WeaponSystem.init(camera);
 
     raycaster = new THREE.Raycaster();
@@ -1717,6 +1768,68 @@ const EnemyManager = (() => {
 
     window.addEventListener('resize', onResize);
     sceneBuilt = true;
+  }
+
+  // ---- ミニマップ ----
+  let minimapStatic = null; // 壁レイアウトを一度だけ描画したオフスクリーンcanvas
+  const MINIMAP_SIZE = 130;
+
+  function buildMinimapStatic() {
+    minimapStatic = document.createElement('canvas');
+    minimapStatic.width = MINIMAP_SIZE;
+    minimapStatic.height = MINIMAP_SIZE;
+    const ctx = minimapStatic.getContext('2d');
+    const cell = MINIMAP_SIZE / GRID_SIZE;
+
+    ctx.fillStyle = 'rgba(20,26,20,0.4)';
+    ctx.fillRect(0, 0, MINIMAP_SIZE, MINIMAP_SIZE);
+
+    ctx.fillStyle = '#3a4a3a';
+    for (let gy = 0; gy < GRID_SIZE; gy++) {
+      for (let gx = 0; gx < GRID_SIZE; gx++) {
+        if (MAP_GRID[gy][gx] === 1) {
+          ctx.fillRect(gx * cell, gy * cell, cell + 0.5, cell + 0.5);
+        }
+      }
+    }
+  }
+
+  function renderMinimap() {
+    if (!minimapStatic || !el.minimapCanvas) return;
+    const ctx = el.minimapCanvas.getContext('2d');
+    ctx.clearRect(0, 0, MINIMAP_SIZE, MINIMAP_SIZE);
+    ctx.drawImage(minimapStatic, 0, 0);
+
+    const cell = MINIMAP_SIZE / GRID_SIZE;
+    const toMap = (x, z) => ({
+      mx: (x / CELL_SIZE + GRID_SIZE / 2) * cell,
+      my: (z / CELL_SIZE + GRID_SIZE / 2) * cell,
+    });
+
+    // 敵(索敵中は赤、未索敵は薄いグレー)
+    EnemyManager.getMinimapData().forEach((e) => {
+      const p = toMap(e.x, e.z);
+      ctx.fillStyle = e.alert ? '#ff3b30' : 'rgba(220,220,210,0.55)';
+      ctx.beginPath();
+      ctx.arc(p.mx, p.my, e.alert ? 3.2 : 2.4, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    // プレイヤー(向きを示す三角形付き)。実際の移動方向(forwardベクトル)と完全に一致させる
+    const pp = toMap(playerPos.x, playerPos.z);
+    const fwd = SensorSystem.state.forward;
+    const yawRad = Math.atan2(-fwd.x, -fwd.z);
+    ctx.save();
+    ctx.translate(pp.mx, pp.my);
+    ctx.rotate(-yawRad);
+    ctx.fillStyle = '#ffb020';
+    ctx.beginPath();
+    ctx.moveTo(0, -6);
+    ctx.lineTo(4, 5);
+    ctx.lineTo(-4, 5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
   }
 
   function onResize() {
@@ -2063,6 +2176,7 @@ const EnemyManager = (() => {
     WeaponSystem.triggerRecoil();
     WeaponSystem.triggerMuzzleFlash();
     AudioSystem.playShot(WeaponSystem.getDamage() / 40);
+    vibrate(12); // 発射の手応え(軽い振動)
 
     raycaster.setFromCamera({ x: 0, y: 0 }, camera);
 
@@ -2113,6 +2227,7 @@ const EnemyManager = (() => {
     playerHP = Math.max(0, playerHP - dmg);
     updateHpHud();
     AudioSystem.playHurt();
+    vibrate(90); // 被弾の手応え
     el.damageFlash.classList.remove('active');
     void el.damageFlash.offsetWidth; // reflow でアニメーション再トリガー
     el.damageFlash.classList.add('active');
@@ -2130,6 +2245,7 @@ const EnemyManager = (() => {
   function onEnemyKilled(enemy, isHeadshot) {
     AudioSystem.playKill();
     updateEnemyCountHud();
+    vibrate(isHeadshot ? [30, 40, 60] : 40); // ヘッドショットは2連の振動で区別
     const label = (enemy && enemy.def && enemy.def.label) || '敵';
     showKillMessage(isHeadshot ? `ヘッドショット! ${label}を撃破` : `${label}を撃破`, isHeadshot);
     if (EnemyManager.getAliveCount() === 0) missionClear();
@@ -2242,9 +2358,10 @@ const EnemyManager = (() => {
       camera.quaternion.copy(SensorSystem.state.quaternion);
 
       // 移動: 駆け足検出、または矢印キー/WASDで前進・後退・ストレイフ
-      const yawRad = THREE.MathUtils.degToRad(SensorSystem.state.yawDeg);
-      const forwardVec = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yawRad);
-      const rightVec = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yawRad);
+      // forward/rightはSensorSystem側でカメラの向きと同じクォータニオンから直接計算されるため、
+      // 見ている方向と走る方向が必ず一致する(オイラー角を経由しない)
+      const forwardVec = SensorSystem.state.forward;
+      const rightVec = SensorSystem.state.right;
 
       let moveX = 0, moveZ = 0;
       let speedBudget = 0; // 有効な入力のうち最大の速度を採用する
@@ -2266,11 +2383,11 @@ const EnemyManager = (() => {
         speedBudget = Math.max(speedBudget, PLAYER_SPEED);
       }
 
-      // 端末を左右に傾ける(ロール)と、正面を向いたまま横に移動する(狭い部屋でも体を回さず操作できる)
-      const roll = SensorSystem.state.rollDeg;
-      if (Math.abs(roll) > STRAFE_ROLL_THRESHOLD) {
-        const t = Math.min(1, (Math.abs(roll) - STRAFE_ROLL_THRESHOLD) / (STRAFE_ROLL_MAX - STRAFE_ROLL_THRESHOLD));
-        const rollStrafe = Math.sign(roll) * t;
+      // 端末を左右に傾けると、正面を向いたまま横に移動する(狭い部屋でも体を回さず操作できる)
+      const tilt = SensorSystem.state.tiltRoll;
+      if (Math.abs(tilt) > STRAFE_DEADZONE) {
+        const t = Math.min(1, (Math.abs(tilt) - STRAFE_DEADZONE) / (STRAFE_FULL - STRAFE_DEADZONE));
+        const rollStrafe = Math.sign(tilt) * t;
         moveX += rightVec.x * rollStrafe;
         moveZ += rightVec.z * rollStrafe;
         speedBudget = Math.max(speedBudget, STRAFE_SPEED);
@@ -2285,6 +2402,7 @@ const EnemyManager = (() => {
       WeaponSystem.update(dt);
       EnemyManager.update(dt);
       updateBulletHoles();
+      renderMinimap();
     }
 
     if (renderer && scene && camera) {
