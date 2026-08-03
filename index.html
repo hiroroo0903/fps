@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+　<!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
@@ -718,12 +718,16 @@ const SensorSystem = (() => {
   const LOWPASS_ALPHA = 0.12;          // 重力/姿勢成分を推定する低域通過フィルタ係数
 
   // ---- THREE.js を用いた向きのクォータニオン計算(標準的なAR的手法) ----
-  let calibrationInverse = null; // 校正時の姿勢の逆クォータニオン
+  // 校正は「左右の向き(ヨー角)」だけを基準に合わせる。上下の傾き(ピッチ)・左右の傾き(ロール)は
+  // 常にその場の端末の生の傾きをそのまま使う(ボタンを押す際に指を伸ばしてわずかに下向きに
+  // 傾いてしまっても、その傾きが基準として固定されてしまわないようにするため)。
+  let calibrationYawQuat = new THREE.Quaternion(); // ヨーのオフセットを打ち消す回転
   let currentDeviceQuaternion = new THREE.Quaternion();
   let zee = new THREE.Vector3(0, 0, 1);
   let euler = new THREE.Euler();
   let q0 = new THREE.Quaternion();
   let q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)); // -PI/2 around X
+  const worldUp = new THREE.Vector3(0, 1, 0);
 
   function screenOrientationAngle() {
     if (screen.orientation && typeof screen.orientation.angle === 'number') {
@@ -746,6 +750,15 @@ const SensorSystem = (() => {
     return q;
   }
 
+  // クォータニオンの水平方向の向き(ヨー角)だけを、ピッチ・ロールの影響を受けずに求める
+  function computeYawFromQuaternion(q) {
+    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
+    fwd.y = 0;
+    if (fwd.lengthSq() < 1e-6) return 0; // 真上/真下を向いている場合のフォールバック
+    fwd.normalize();
+    return Math.atan2(-fwd.x, -fwd.z);
+  }
+
   // ---- 内部状態 ----
   const state = {
     supported: 'DeviceOrientationEvent' in window && 'DeviceMotionEvent' in window,
@@ -765,13 +778,9 @@ const SensorSystem = (() => {
   // 低域通過フィルタ推定値(重力方向・姿勢のベースライン)
   let lpX = 0, lpY = 0, lpZ = 0, lpInit = false;
 
-  function handleOrientation(event) {
-    if (event.alpha === null || event.beta === null || event.gamma === null) return;
-    currentDeviceQuaternion = computeDeviceQuaternion(event.alpha, event.beta, event.gamma);
-
-    if (!state.calibrated) return;
-
-    const rel = calibrationInverse.clone().multiply(currentDeviceQuaternion);
+  function updateDerivedState(deviceQ) {
+    // ヨーだけを校正基準に合わせて回転させる。ピッチ・ロールは常に生の値をそのまま反映する。
+    const rel = calibrationYawQuat.clone().multiply(deviceQ);
     state.quaternion.copy(rel);
 
     // 表示・参考用にyaw・pitch・rollを抽出(YXZ順)。移動方向の計算には使わない
@@ -793,6 +802,15 @@ const SensorSystem = (() => {
 
     state.forward.copy(fwd3);
     state.right.copy(right3);
+  }
+
+  function handleOrientation(event) {
+    if (event.alpha === null || event.beta === null || event.gamma === null) return;
+    currentDeviceQuaternion = computeDeviceQuaternion(event.alpha, event.beta, event.gamma);
+
+    if (!state.calibrated) return;
+
+    updateDerivedState(currentDeviceQuaternion);
   }
 
   function handleMotion(event) {
@@ -858,16 +876,15 @@ const SensorSystem = (() => {
     return state.permissionGranted;
   }
 
-  // ゲーム開始時、現在の端末の向きを「正面(0度)」として校正する
+  // 正面リセット: 現在向いている「左右の方向(ヨー角)」だけを正面として校正する。
+  // 上下の傾き(ピッチ)・左右の傾き(ロール)はここでは固定しない(常に生の値を使う)ため、
+  // ボタンを押す際に指を伸ばしてわずかに下向きになっても、視点が変な方向にズレない。
   function calibrate() {
-    calibrationInverse = currentDeviceQuaternion.clone().invert();
-    state.quaternion.identity();
-    state.yawDeg = 0;
-    state.pitchDeg = 0;
-    state.rollDeg = 0;
-    state.forward.set(0, 0, -1);
-    state.right.set(1, 0, 0);
+    const rawYaw = computeYawFromQuaternion(currentDeviceQuaternion);
+    calibrationYawQuat.setFromAxisAngle(worldUp, -rawYaw);
     state.calibrated = true;
+    // 次のイベントを待たず、この瞬間の姿勢を即座に反映する
+    updateDerivedState(currentDeviceQuaternion);
   }
 
   return {
