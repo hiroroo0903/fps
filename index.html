@@ -89,6 +89,25 @@ html, body {
 .weapon-desc { font-size: 0.78rem; color: var(--text-main); }
 .weapon-stats { font-size: 0.7rem; color: var(--text-dim); }
 
+.difficulty-select {
+  display: flex; gap: 0.5rem; margin: 0.3rem 0 0.5rem 0;
+}
+.diff-card {
+  background: var(--panel);
+  border: 1px solid var(--panel-line);
+  color: var(--text-main);
+  padding: 0.4rem 0.9rem;
+  clip-path: polygon(10% 0, 100% 0, 90% 100%, 0 100%);
+  font-family: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.diff-card.selected {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 10px rgba(255, 176, 32, 0.3) inset;
+}
+
 .howto {
   color: var(--text-dim);
   font-size: 0.82rem;
@@ -203,7 +222,7 @@ html, body {
 <!-- タイトル画面 -->
 <div id="screen-title" class="screen">
   <h1 class="title">MOTION ASSAULT</h1>
-  <p class="subtitle">駆け足で進み、構えて、振り上げて撃て。</p>
+  <p class="subtitle">駆け足で進み、構えて、タップで撃て。</p>
 
   <div class="weapon-select">
     <button class="weapon-card" id="weapon-m4" data-weapon="m4">
@@ -218,10 +237,22 @@ html, body {
     </button>
   </div>
 
+  <div class="difficulty-select">
+    <button class="diff-card" data-difficulty="easy">
+      <span class="diff-name">イージー</span>
+    </button>
+    <button class="diff-card selected" data-difficulty="normal">
+      <span class="diff-name">ノーマル</span>
+    </button>
+    <button class="diff-card" data-difficulty="hard">
+      <span class="diff-name">ハード</span>
+    </button>
+  </div>
+
   <div class="howto">
     <p>🏃 その場で駆け足 → 前進</p>
     <p>📱 端末の向き → 視点</p>
-    <p>⬆️ 下から上へ振り上げ → 発射(画面タップでも可)</p>
+    <p>👆 画面をタップ → 発射</p>
   </div>
 
   <button id="btn-start" class="btn-primary">スタート</button>
@@ -341,6 +372,41 @@ function buildGrid() {
 }
 
 const MAP_GRID = buildGrid();
+
+// ドア開口部(部屋と通路が接する境界)を矩形の隣接関係から自動算出する。
+// 各要素: { axis: 'x'|'z', ...境界座標(グリッド単位)..., roomId }
+// axis='x' : 東西方向に通り抜ける開口部(境界線はX方向に一定、Y方向に幅を持つ)
+// axis='z' : 南北方向に通り抜ける開口部(境界線はY方向に一定、X方向に幅を持つ)
+function computeDoorways() {
+  const doors = [];
+  CORRIDORS.forEach((c) => {
+    ROOMS.forEach((r) => {
+      // 通路が部屋の左側に接する(通路の右端 = 部屋の左端)
+      if (c.x + c.w === r.x) {
+        const y0 = Math.max(c.y, r.y), y1 = Math.min(c.y + c.h, r.y + r.h);
+        if (y1 > y0) doors.push({ axis: 'x', bx: r.x, y0, y1, roomId: r.id });
+      }
+      // 通路が部屋の右側に接する
+      if (r.x + r.w === c.x) {
+        const y0 = Math.max(c.y, r.y), y1 = Math.min(c.y + c.h, r.y + r.h);
+        if (y1 > y0) doors.push({ axis: 'x', bx: c.x, y0, y1, roomId: r.id });
+      }
+      // 通路が部屋の上側に接する
+      if (c.y + c.h === r.y) {
+        const x0 = Math.max(c.x, r.x), x1 = Math.min(c.x + c.w, r.x + r.w);
+        if (x1 > x0) doors.push({ axis: 'z', by: r.y, x0, x1, roomId: r.id });
+      }
+      // 通路が部屋の下側に接する
+      if (r.y + r.h === c.y) {
+        const x0 = Math.max(c.x, r.x), x1 = Math.min(c.x + c.w, r.x + r.w);
+        if (x1 > x0) doors.push({ axis: 'z', by: c.y, x0, x1, roomId: r.id });
+      }
+    });
+  });
+  return doors;
+}
+
+const DOORWAYS = computeDoorways();
 
 // プレイヤー開始位置(ルームAの中央付近)、グリッド座標
 const PLAYER_START = { gx: 3, gy: 3 };
@@ -476,7 +542,7 @@ function findPath(start, goal) {
 // iPhoneのDeviceOrientation / DeviceMotionを扱うモジュール。
 // - 視点方向: 端末の向き(相対方位、開始時を基準0度として校正)
 // - 前進: その場駆け足の検出(加速度の周期的な上下振動)
-// - 発射: 端末を下から上へ振り上げる急加速の検出(+クールダウン)
+// (発射は画面タップのみ。振り上げジェスチャーは誤作動が多いため廃止)
 // ============================================================
 
 const SensorSystem = (() => {
@@ -484,11 +550,7 @@ const SensorSystem = (() => {
   const RUN_PEAK_THRESHOLD = 1.6;      // 足踏み検出: 加速度変化のピーク閾値 (m/s^2, 高域成分)
   const RUN_MIN_INTERVAL_MS = 220;     // 足踏みのピーク間の最小間隔
   const RUN_TIMEOUT_MS = 450;          // 直近のピークからこの時間内なら「駆け足中」とみなす
-  const FIRE_SPIKE_THRESHOLD = 2.6;    // 発射ジェスチャー検出: 高域成分の閾値(足踏みより明確に高い)
-  const FIRE_COOLDOWN_BASE_MS = 300;   // 武器ごとのクールダウンで上書きされる基本値
   const LOWPASS_ALPHA = 0.12;          // 重力/姿勢成分を推定する低域通過フィルタ係数
-  const AIM_PITCH_MIN_DEG = -60;       // 「構えている」とみなすピッチ角度範囲(下限)
-  const AIM_PITCH_MAX_DEG = 60;        // 「構えている」とみなすピッチ角度範囲(上限)
 
   // ---- THREE.js を用いた向きのクォータニオン計算(標準的なAR的手法) ----
   let calibrationInverse = null; // 校正時の姿勢の逆クォータニオン
@@ -529,14 +591,10 @@ const SensorSystem = (() => {
     pitchDeg: 0,
     isRunning: false,
     lastRunPeakTime: 0,
-    lastFireTime: 0,
-    fireCooldownMs: FIRE_COOLDOWN_BASE_MS,
   };
 
   // 低域通過フィルタ推定値(重力方向・姿勢のベースライン)
   let lpX = 0, lpY = 0, lpZ = 0, lpInit = false;
-
-  let onFireCallback = null;
 
   function handleOrientation(event) {
     if (event.alpha === null || event.beta === null || event.gamma === null) return;
@@ -573,18 +631,6 @@ const SensorSystem = (() => {
     const highMag = Math.sqrt(hx * hx + hy * hy + hz * hz);
 
     const now = performance.now();
-
-    // --- 発射ジェスチャー判定(大きい急加速、かつ構え姿勢の範囲内) ---
-    const withinAimRange = state.pitchDeg > AIM_PITCH_MIN_DEG && state.pitchDeg < AIM_PITCH_MAX_DEG;
-    if (
-      highMag > FIRE_SPIKE_THRESHOLD &&
-      withinAimRange &&
-      now - state.lastFireTime > state.fireCooldownMs
-    ) {
-      state.lastFireTime = now;
-      if (onFireCallback) onFireCallback();
-      return; // 発射判定した場合は同フレームで足踏み判定は行わない(誤爆防止)
-    }
 
     // --- 駆け足(足踏み)判定: 中程度の周期的ピーク ---
     if (highMag > RUN_PEAK_THRESHOLD && now - state.lastRunPeakTime > RUN_MIN_INTERVAL_MS) {
@@ -627,20 +673,10 @@ const SensorSystem = (() => {
     state.calibrated = true;
   }
 
-  function setFireCooldown(ms) {
-    state.fireCooldownMs = ms;
-  }
-
-  function setOnFire(cb) {
-    onFireCallback = cb;
-  }
-
   return {
     state,
     requestPermission,
     calibrate,
-    setFireCooldown,
-    setOnFire,
   };
 })();
 
@@ -673,33 +709,73 @@ const AudioSystem = (() => {
     return buffer;
   }
 
-  // 発射音: ノイズバースト + 低いピッチのクリック
+  // 発射音: クラック(鋭いアタック)+ ボディ(中低域の破裂)+ パンチ(低音の衝撃)+ 残響テール、の4層構成
   function playShot(power = 1.0) {
     const c = ensureContext();
     const now = c.currentTime;
 
-    const noise = c.createBufferSource();
-    noise.buffer = noiseBuffer(0.12);
-    const noiseFilter = c.createBiquadFilter();
-    noiseFilter.type = 'bandpass';
-    noiseFilter.frequency.value = 1200 * power;
-    const noiseGain = c.createGain();
-    noiseGain.gain.setValueAtTime(0.5 * power, now);
-    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
-    noise.connect(noiseFilter).connect(noiseGain).connect(c.destination);
-    noise.start(now);
-    noise.stop(now + 0.15);
+    // クラック: 発射の瞬間の鋭い破裂音
+    const crack = c.createBufferSource();
+    crack.buffer = noiseBuffer(0.05);
+    const crackFilter = c.createBiquadFilter();
+    crackFilter.type = 'highpass';
+    crackFilter.frequency.value = 1600;
+    const crackGain = c.createGain();
+    crackGain.gain.setValueAtTime(0.9, now);
+    crackGain.gain.exponentialRampToValueAtTime(0.001, now + 0.045);
+    crack.connect(crackFilter).connect(crackGain).connect(c.destination);
+    crack.start(now); crack.stop(now + 0.05);
 
-    const osc = c.createOscillator();
-    osc.type = 'square';
-    osc.frequency.setValueAtTime(140 * power, now);
-    osc.frequency.exponentialRampToValueAtTime(40, now + 0.08);
-    const oscGain = c.createGain();
-    oscGain.gain.setValueAtTime(0.35, now);
-    oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
-    osc.connect(oscGain).connect(c.destination);
-    osc.start(now);
-    osc.stop(now + 0.1);
+    // ボディ: 発射の中低域の「バン」という破裂感
+    const body = c.createBufferSource();
+    body.buffer = noiseBuffer(0.18);
+    const bodyFilter = c.createBiquadFilter();
+    bodyFilter.type = 'bandpass';
+    bodyFilter.frequency.value = 550 * power;
+    bodyFilter.Q.value = 0.6;
+    const bodyGain = c.createGain();
+    bodyGain.gain.setValueAtTime(0.85 * power, now);
+    bodyGain.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+    body.connect(bodyFilter).connect(bodyGain).connect(c.destination);
+    body.start(now); body.stop(now + 0.18);
+
+    // パンチ: 低音の衝撃(迫力の核)
+    const punch = c.createOscillator();
+    punch.type = 'sine';
+    punch.frequency.setValueAtTime(95 * power, now);
+    punch.frequency.exponentialRampToValueAtTime(28, now + 0.11);
+    const punchGain = c.createGain();
+    punchGain.gain.setValueAtTime(0.9, now);
+    punchGain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+    punch.connect(punchGain).connect(c.destination);
+    punch.start(now); punch.stop(now + 0.14);
+
+    // 歪み(軽いディストーションでパリッとした質感を足す)
+    const shaper = c.createWaveShaper();
+    const curve = new Float32Array(256);
+    for (let i = 0; i < 256; i++) {
+      const x = (i / 255) * 2 - 1;
+      curve[i] = Math.tanh(x * 3.2);
+    }
+    shaper.curve = curve;
+    const distGain = c.createGain();
+    distGain.gain.setValueAtTime(0.28, now);
+    distGain.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
+    crack.connect(shaper);
+    shaper.connect(distGain).connect(c.destination);
+
+    // 残響テール: 屋内で反響するような減衰音
+    const tail = c.createBufferSource();
+    tail.buffer = noiseBuffer(0.4);
+    const tailFilter = c.createBiquadFilter();
+    tailFilter.type = 'lowpass';
+    tailFilter.frequency.value = 900;
+    const tailGain = c.createGain();
+    tailGain.gain.setValueAtTime(0.001, now);
+    tailGain.gain.linearRampToValueAtTime(0.22, now + 0.02);
+    tailGain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+    tail.connect(tailFilter).connect(tailGain).connect(c.destination);
+    tail.start(now); tail.stop(now + 0.4);
   }
 
   // 被弾音: 低いノイズの短いヒット
@@ -830,6 +906,7 @@ const WeaponSystem = (() => {
   let currentKey = 'm4';
   let viewModelGroup = null;
   let recoilT = 0; // 反動アニメーションの進行度(0で静止)
+  let flashT = 0;  // マズルフラッシュの進行度(0で非表示)
   let camera = null;
 
   function buildViewModel(key) {
@@ -890,6 +967,30 @@ const WeaponSystem = (() => {
       group.add(woodStock);
     }
 
+    // マズルフラッシュ(発射の瞬間だけ光る火花)。銃口(銃身の先端)に配置。
+    const flashGroup = new THREE.Group();
+    const flashMat = new THREE.MeshBasicMaterial({
+      color: 0xfff2b0, transparent: true, opacity: 0, depthWrite: false,
+    });
+    const flashCore = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 8), flashMat);
+    flashGroup.add(flashCore);
+    // 十字方向に伸びる光条(火花の飛び散り)
+    for (let i = 0; i < 4; i++) {
+      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.02, 0.14, 6), flashMat);
+      spike.rotation.z = (Math.PI / 2) * i + Math.PI / 4;
+      flashGroup.add(spike);
+    }
+    flashGroup.position.set(0, 0.01, -0.86);
+    flashGroup.scale.set(0.01, 0.01, 0.01);
+    group.add(flashGroup);
+    group.userData.flashGroup = flashGroup;
+    group.userData.flashMat = flashMat;
+
+    const muzzleLight = new THREE.PointLight(0xffddaa, 0, 4, 2);
+    muzzleLight.position.copy(flashGroup.position);
+    group.add(muzzleLight);
+    group.userData.muzzleLight = muzzleLight;
+
     group.position.set(0.16, -0.16, -0.35);
     group.rotation.y = -0.02;
     return group;
@@ -907,7 +1008,6 @@ const WeaponSystem = (() => {
     }
     viewModelGroup = buildViewModel(key);
     if (camera) camera.add(viewModelGroup);
-    SensorSystem.setFireCooldown(WEAPON_DEFS[key].fireCooldownOverride || WEAPON_DEFS[key].cooldownMs);
   }
 
   function getDamage() {
@@ -922,6 +1022,10 @@ const WeaponSystem = (() => {
     recoilT = 1.0;
   }
 
+  function triggerMuzzleFlash() {
+    flashT = 1.0;
+  }
+
   function update(dt) {
     if (viewModelGroup && recoilT > 0) {
       recoilT = Math.max(0, recoilT - dt * 6);
@@ -932,13 +1036,27 @@ const WeaponSystem = (() => {
       viewModelGroup.position.z = -0.35;
       viewModelGroup.rotation.x = 0;
     }
+
+    if (viewModelGroup) {
+      const { flashGroup, flashMat, muzzleLight } = viewModelGroup.userData;
+      if (flashT > 0) {
+        flashT = Math.max(0, flashT - dt * 14); // 非常に短く(0.07秒程度)減衰
+        flashMat.opacity = flashT;
+        const scale = 0.6 + flashT * 1.4;
+        flashGroup.scale.set(scale, scale, scale);
+        muzzleLight.intensity = flashT * 3.5;
+      } else if (flashGroup) {
+        flashGroup.scale.set(0.01, 0.01, 0.01);
+        muzzleLight.intensity = 0;
+      }
+    }
   }
 
   function getCurrentKey() {
     return currentKey;
   }
 
-  return { init, setWeapon, getDamage, getCooldownMs, triggerRecoil, update, getCurrentKey };
+  return { init, setWeapon, getDamage, getCooldownMs, triggerRecoil, triggerMuzzleFlash, update, getCurrentKey };
 })();
 
 
@@ -997,6 +1115,13 @@ const ENEMY_TYPES = {
   },
 };
 
+// 難易度プリセット: HP・攻撃力・移動速度の倍率(タイトル画面で選択)
+const DIFFICULTY_PRESETS = {
+  easy:   { label: 'イージー', hp: 0.65, dmg: 0.6,  speed: 0.9  },
+  normal: { label: 'ノーマル', hp: 1.0,  dmg: 1.0,  speed: 1.0  },
+  hard:   { label: 'ハード',   hp: 1.6,  dmg: 1.5,  speed: 1.15 },
+};
+
 const EnemyManager = (() => {
   let scene = null;
   let enemies = [];
@@ -1005,43 +1130,99 @@ const EnemyManager = (() => {
   let onEnemyKilled = null;
   let getPlayerPos = null; // () => THREE.Vector3
   let getPlayerGrid = null; // () => {gx, gy}
+  let difficultyMult = DIFFICULTY_PRESETS.normal;
 
   function buildMesh(def) {
+    const s = def.size;
     const group = new THREE.Group();
     const bodyMat = new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.7 });
+    const gunMat = new THREE.MeshStandardMaterial({ color: 0x262626, roughness: 0.5, metalness: 0.4 });
     const coreMat = new THREE.MeshStandardMaterial({
-      color: 0xffffff, emissive: 0x000000, emissiveIntensity: 1.0, roughness: 0.3,
+      color: 0xffffff, emissive: 0x000000, emissiveIntensity: 1.2, roughness: 0.3,
     });
 
-    const body = new THREE.Mesh(
-      new THREE.CapsuleGeometry(def.size * 0.35, def.size * 0.7, 4, 8),
-      bodyMat
-    );
-    body.position.y = def.size * 0.6;
-    group.add(body);
+    // 脚(腰のピボットから振れるように、それぞれグループ化)
+    const legGeo = new THREE.BoxGeometry(0.15 * s, 0.5 * s, 0.17 * s);
+    const legLPivot = new THREE.Group();
+    legLPivot.position.set(-0.13 * s, 0.5 * s, 0);
+    const legL = new THREE.Mesh(legGeo, bodyMat);
+    legL.position.set(0, -0.25 * s, 0);
+    legLPivot.add(legL);
 
-    // 「目」= 索敵・攻撃予兆状態を色で示すコア
-    const core = new THREE.Mesh(new THREE.SphereGeometry(def.size * 0.14, 8, 8), coreMat);
-    core.position.set(0, def.size * 0.85, def.size * 0.28);
+    const legRPivot = new THREE.Group();
+    legRPivot.position.set(0.13 * s, 0.5 * s, 0);
+    const legR = new THREE.Mesh(legGeo, bodyMat);
+    legR.position.set(0, -0.25 * s, 0);
+    legRPivot.add(legR);
+
+    group.add(legLPivot, legRPivot);
+
+    // 胴体
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.36 * s, 0.48 * s, 0.24 * s), bodyMat);
+    torso.position.set(0, 0.74 * s, 0);
+    group.add(torso);
+
+    // 頭
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.15 * s, 8, 8), bodyMat);
+    head.position.set(0, 1.08 * s, 0);
+    group.add(head);
+
+    // 索敵・攻撃予兆の状態を示すコア(頭部の発光点)
+    const core = new THREE.Mesh(new THREE.SphereGeometry(0.05 * s, 6, 6), coreMat);
+    core.position.set(0, 1.09 * s, 0.13 * s);
     group.add(core);
-    group.userData.core = core;
-    group.userData.coreMat = coreMat;
+
+    // 左腕(体側に添える)
+    const armGeo = new THREE.BoxGeometry(0.12 * s, 0.4 * s, 0.12 * s);
+    const armL = new THREE.Mesh(armGeo, bodyMat);
+    armL.position.set(-0.26 * s, 0.7 * s, 0);
+    armL.rotation.z = 0.2;
+    group.add(armL);
+
+    // 右腕(銃を前方に構える)
+    const armR = new THREE.Mesh(armGeo, bodyMat);
+    armR.position.set(0.2 * s, 0.86 * s, 0.14 * s);
+    armR.rotation.x = -1.15;
+    group.add(armR);
+
+    // 銃(右腕の先、前方に構えた状態)
+    const gunGroup = new THREE.Group();
+    const gunBody = new THREE.Mesh(new THREE.BoxGeometry(0.08 * s, 0.08 * s, 0.5 * s), gunMat);
+    gunBody.position.set(0, 0, -0.22 * s);
+    gunGroup.add(gunBody);
+    const gunMag = new THREE.Mesh(new THREE.BoxGeometry(0.05 * s, 0.16 * s, 0.06 * s), gunMat);
+    gunMag.position.set(0, -0.1 * s, -0.05 * s);
+    gunGroup.add(gunMag);
+    gunGroup.position.set(0.2 * s, 0.56 * s, 0.36 * s);
+    group.add(gunGroup);
 
     // 命中判定用の当たり判定メッシュ(見た目より一回り大きい・非表示)
-    // センサー操作の精密さの限界を補うため、実際の見た目より寛容な判定にする
     const hitbox = new THREE.Mesh(
-      new THREE.CapsuleGeometry(def.size * 0.55, def.size * 0.9, 4, 8),
+      new THREE.CapsuleGeometry(0.32 * s, 0.72 * s, 4, 8),
       new THREE.MeshBasicMaterial({ visible: false })
     );
-    hitbox.position.y = def.size * 0.6;
+    hitbox.position.y = 0.62 * s;
     group.add(hitbox);
+
+    group.userData.core = core;
+    group.userData.coreMat = coreMat;
     group.userData.hitbox = hitbox;
+    group.userData.legLPivot = legLPivot;
+    group.userData.legRPivot = legRPivot;
+    group.userData.walkPhase = Math.random() * Math.PI * 2;
 
     return group;
   }
 
   function spawn(spawnDef) {
-    const def = ENEMY_TYPES[spawnDef.type];
+    const baseDef = ENEMY_TYPES[spawnDef.type];
+    // 難易度倍率を適用した実効ステータス(元のENEMY_TYPESは変更しない)
+    const def = {
+      ...baseDef,
+      hp: Math.round(baseDef.hp * difficultyMult.hp),
+      dmg: Math.round(baseDef.dmg * difficultyMult.dmg),
+      speed: baseDef.speed * difficultyMult.speed,
+    };
     const world = gridToWorld(spawnDef.gx, spawnDef.gy);
     const mesh = buildMesh(def);
     mesh.position.set(world.x, 0, world.z);
@@ -1065,12 +1246,13 @@ const EnemyManager = (() => {
     return enemy;
   }
 
-  function init(threeScene, spawns, callbacks) {
+  function init(threeScene, spawns, callbacks, difficultyKey) {
     scene = threeScene;
     onPlayerDamage = callbacks.onPlayerDamage;
     onEnemyKilled = callbacks.onEnemyKilled;
     getPlayerPos = callbacks.getPlayerPos;
     getPlayerGrid = callbacks.getPlayerGrid;
+    difficultyMult = DIFFICULTY_PRESETS[difficultyKey] || DIFFICULTY_PRESETS.normal;
 
     // 再スタート時: 前回の敵・弾のメッシュをシーンから除去
     enemies.forEach(e => { if (e.mesh) scene.remove(e.mesh); });
@@ -1140,8 +1322,26 @@ const EnemyManager = (() => {
     enemy.mesh.userData.coreMat.emissive.setHex(hex);
   }
 
+  function animateLegs(enemy, dt, walking) {
+    const ud = enemy.mesh.userData;
+    if (!ud.legLPivot || !ud.legRPivot) return;
+    if (walking) {
+      ud.walkPhase += dt * 9 * (enemy.def.speed / 2.0 + 0.4);
+      const swing = Math.sin(ud.walkPhase) * 0.55;
+      ud.legLPivot.rotation.x = swing;
+      ud.legRPivot.rotation.x = -swing;
+    } else {
+      // 静止時は中立姿勢へゆっくり戻す
+      ud.legLPivot.rotation.x *= 0.8;
+      ud.legRPivot.rotation.x *= 0.8;
+    }
+  }
+
   function moveAlongPath(enemy, dt) {
-    if (enemy.path.length === 0) return;
+    if (enemy.path.length === 0) {
+      animateLegs(enemy, dt, false);
+      return;
+    }
     const next = enemy.path[0];
     const nw = gridToWorld(next.gx, next.gy);
     const target = new THREE.Vector3(nw.x, 0, nw.z);
@@ -1159,6 +1359,7 @@ const EnemyManager = (() => {
       enemy.mesh.rotation.y = Math.atan2(dir.x, dir.z);
     }
     enemy.mesh.position.set(enemy.pos.x, 0, enemy.pos.z);
+    animateLegs(enemy, dt, true);
   }
 
   function update(dt) {
@@ -1175,6 +1376,7 @@ const EnemyManager = (() => {
       switch (enemy.state) {
         case 'idle': {
           setCoreColor(enemy, 0x333333);
+          animateLegs(enemy, dt, false);
           if (distToPlayer < def.detectRange) {
             enemy.state = 'chase';
           }
@@ -1204,6 +1406,7 @@ const EnemyManager = (() => {
         }
         case 'melee_range': {
           setCoreColor(enemy, 0xff2222);
+          animateLegs(enemy, dt, false);
           if (distToPlayer > def.atkRange * 1.2) {
             enemy.state = 'chase';
             break;
@@ -1216,6 +1419,7 @@ const EnemyManager = (() => {
         }
         case 'telegraph': {
           setCoreColor(enemy, 0xff8800); // 予兆: オレンジに発光 → プレイヤーは視認して先制撃破できる
+          animateLegs(enemy, dt, false);
           if (distToPlayer > def.atkRange * 1.5) {
             enemy.state = 'chase';
             break;
@@ -1288,17 +1492,24 @@ const EnemyManager = (() => {
     enemyCount: document.getElementById('enemy-count'),
     damageFlash: document.getElementById('damage-flash'),
     weaponCards: document.querySelectorAll('.weapon-card'),
+    diffCards: document.querySelectorAll('.diff-card'),
     canvasContainer: document.getElementById('canvas-container'),
     gameoverStats: document.getElementById('gameover-stats'),
     clearStats: document.getElementById('clear-stats'),
   };
 
   let selectedWeapon = 'ak';
+  let selectedDifficulty = 'normal';
   let gameState = 'title'; // title | playing | gameover | clear
   let sceneBuilt = false;
 
   let scene, camera, renderer, clock;
   let raycaster;
+  let wallGroup = null;
+  let bulletHoles = []; // {mesh, spawnTime}
+  const BULLET_HOLE_LIFETIME = 16000; // ms(しばらくすると消える)
+  const BULLET_HOLE_FADE = 2500;      // ms(消える直前にフェードアウト)
+  const BULLET_HOLE_MAX = 40;         // 上限数(古いものから除去)
   let playerPos = new THREE.Vector3();
   let playerHP = PLAYER_MAX_HP;
   let lastFireTime = 0;
@@ -1310,6 +1521,15 @@ const EnemyManager = (() => {
       el.weaponCards.forEach(c => c.classList.remove('selected'));
       card.classList.add('selected');
       selectedWeapon = card.dataset.weapon;
+    });
+  });
+
+  // ---- 難易度選択UI ----
+  el.diffCards.forEach(card => {
+    card.addEventListener('click', () => {
+      el.diffCards.forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+      selectedDifficulty = card.dataset.difficulty;
     });
   });
 
@@ -1342,6 +1562,9 @@ const EnemyManager = (() => {
     scene.add(camera);
 
     buildMap();
+    buildRoomCarpets();
+    buildDoorframes();
+    buildColumns();
     buildCeilingLights();
     WeaponSystem.init(camera);
 
@@ -1440,7 +1663,7 @@ const EnemyManager = (() => {
     const wallTex = buildWallTexture();
     const wallGeo = new THREE.BoxGeometry(CELL_SIZE, WALL_HEIGHT, CELL_SIZE);
     const wallMat = new THREE.MeshStandardMaterial({ map: wallTex, roughness: 0.85 });
-    const wallGroup = new THREE.Group();
+    wallGroup = new THREE.Group();
 
     for (let gy = 0; gy < GRID_SIZE; gy++) {
       for (let gx = 0; gx < GRID_SIZE; gx++) {
@@ -1462,7 +1685,100 @@ const EnemyManager = (() => {
     scene.add(wallGroup);
   }
 
-  // ---- 天井の照明パネル(各部屋に配置、発光パネル+補助ポイントライト) ----
+  // ---- 部屋ごとのカーペット床(通路のタイル床と質感を変え、部屋/廊下の区別を出す) ----
+  function buildCarpetTexture() {
+    return makeCanvasTexture((ctx, s) => {
+      ctx.fillStyle = '#4f585c';
+      ctx.fillRect(0, 0, s, s);
+      ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+      ctx.lineWidth = 1;
+      for (let i = 0; i < s; i += 5) {
+        ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(s, i); ctx.stroke();
+      }
+      ctx.fillStyle = 'rgba(255,255,255,0.035)';
+      for (let i = 0; i < 60; i++) {
+        ctx.fillRect(Math.random() * s, Math.random() * s, 2, 2);
+      }
+    });
+  }
+
+  function buildRoomCarpets() {
+    const carpetTex = buildCarpetTexture();
+    ROOMS.forEach((room) => {
+      const tex = carpetTex.clone();
+      tex.needsUpdate = true;
+      tex.repeat.set(room.w, room.h);
+      const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 1.0 });
+      const geo = new THREE.PlaneGeometry(room.w * CELL_SIZE, room.h * CELL_SIZE);
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.set(
+        (room.x + room.w / 2 - GRID_SIZE / 2) * CELL_SIZE,
+        0.012, // タイル床よりわずかに高くしてz-fighting回避
+        (room.y + room.h / 2 - GRID_SIZE / 2) * CELL_SIZE
+      );
+      scene.add(mesh);
+    });
+  }
+
+  // ---- ドアのアーチ枠(部屋と通路の接続部分、実在のビルらしい開口部の縁取り) ----
+  function buildDoorframes() {
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0x3c3226, roughness: 0.55, metalness: 0.25 });
+    const postThickness = 0.16;
+    const postHeight = WALL_HEIGHT * 0.82;
+    const headerHeight = 0.26;
+
+    DOORWAYS.forEach((d) => {
+      const postGeo = new THREE.BoxGeometry(postThickness, postHeight, postThickness);
+      if (d.axis === 'x') {
+        const worldX = (d.bx - GRID_SIZE / 2) * CELL_SIZE;
+        const z0 = (d.y0 - GRID_SIZE / 2) * CELL_SIZE;
+        const z1 = (d.y1 - GRID_SIZE / 2) * CELL_SIZE;
+        const post1 = new THREE.Mesh(postGeo, frameMat);
+        post1.position.set(worldX, postHeight / 2, z0);
+        const post2 = new THREE.Mesh(postGeo, frameMat);
+        post2.position.set(worldX, postHeight / 2, z1);
+        const header = new THREE.Mesh(
+          new THREE.BoxGeometry(postThickness * 1.4, headerHeight, (z1 - z0) + postThickness),
+          frameMat
+        );
+        header.position.set(worldX, postHeight, (z0 + z1) / 2);
+        scene.add(post1, post2, header);
+      } else {
+        const worldZ = (d.by - GRID_SIZE / 2) * CELL_SIZE;
+        const x0 = (d.x0 - GRID_SIZE / 2) * CELL_SIZE;
+        const x1 = (d.x1 - GRID_SIZE / 2) * CELL_SIZE;
+        const post1 = new THREE.Mesh(postGeo, frameMat);
+        post1.position.set(x0, postHeight / 2, worldZ);
+        const post2 = new THREE.Mesh(postGeo, frameMat);
+        post2.position.set(x1, postHeight / 2, worldZ);
+        const header = new THREE.Mesh(
+          new THREE.BoxGeometry((x1 - x0) + postThickness, headerHeight, postThickness * 1.4),
+          frameMat
+        );
+        header.position.set((x0 + x1) / 2, postHeight, worldZ);
+        scene.add(post1, post2, header);
+      }
+    });
+  }
+
+  // ---- 広い部屋の支柱(オフィスビルの構造柱らしい演出) ----
+  function buildColumns() {
+    const colMat = new THREE.MeshStandardMaterial({ color: 0xb9b6a9, roughness: 0.7 });
+    ROOMS.forEach((room) => {
+      if (room.w * room.h < 30) return; // 大部屋のみ
+      const cx = (room.x + room.w / 2 - GRID_SIZE / 2) * CELL_SIZE;
+      const cz = (room.y + room.h / 2 - GRID_SIZE / 2) * CELL_SIZE;
+      [-1, 1].forEach((side) => {
+        const col = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.22, 0.22, WALL_HEIGHT, 12),
+          colMat
+        );
+        col.position.set(cx + side * CELL_SIZE * 1.3, WALL_HEIGHT / 2, cz);
+        scene.add(col);
+      });
+    });
+  }
   function buildCeilingLights() {
     const fixtureMat = new THREE.MeshBasicMaterial({ color: 0xfff6e2 });
 
@@ -1513,6 +1829,55 @@ const EnemyManager = (() => {
     }
   }
 
+  // ---- 弾痕デカール ----
+  function spawnBulletHole(point, normal) {
+    const geo = new THREE.CircleGeometry(0.09, 12);
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0x18120e, transparent: true, opacity: 0.85,
+      depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.copy(point).addScaledVector(normal, 0.015);
+    const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+    mesh.quaternion.copy(quat);
+    // 弾痕の周りに薄い焦げ跡を追加(奥行きのある傷跡に見せる)
+    const scorchMat = new THREE.MeshBasicMaterial({
+      color: 0x2a221a, transparent: true, opacity: 0.35, depthWrite: false,
+      polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3,
+    });
+    const scorch = new THREE.Mesh(new THREE.CircleGeometry(0.19, 10), scorchMat);
+    scorch.position.copy(point).addScaledVector(normal, 0.01);
+    scorch.quaternion.copy(quat);
+
+    scene.add(scorch);
+    scene.add(mesh);
+    bulletHoles.push({ mesh, mat, scorch, scorchMat, spawnTime: performance.now() });
+
+    // 上限を超えたら古いものから除去
+    while (bulletHoles.length > BULLET_HOLE_MAX) {
+      const old = bulletHoles.shift();
+      scene.remove(old.mesh);
+      scene.remove(old.scorch);
+    }
+  }
+
+  function updateBulletHoles() {
+    const now = performance.now();
+    for (let i = bulletHoles.length - 1; i >= 0; i--) {
+      const bh = bulletHoles[i];
+      const age = now - bh.spawnTime;
+      if (age > BULLET_HOLE_LIFETIME) {
+        scene.remove(bh.mesh);
+        scene.remove(bh.scorch);
+        bulletHoles.splice(i, 1);
+      } else if (age > BULLET_HOLE_LIFETIME - BULLET_HOLE_FADE) {
+        const fadeT = 1 - (age - (BULLET_HOLE_LIFETIME - BULLET_HOLE_FADE)) / BULLET_HOLE_FADE;
+        bh.mat.opacity = 0.85 * fadeT;
+        bh.scorchMat.opacity = 0.35 * fadeT;
+      }
+    }
+  }
+
   // ---- 射撃 ----
   function attemptFire() {
     if (gameState !== 'playing') return;
@@ -1522,19 +1887,37 @@ const EnemyManager = (() => {
     lastFireTime = now;
 
     WeaponSystem.triggerRecoil();
+    WeaponSystem.triggerMuzzleFlash();
     AudioSystem.playShot(WeaponSystem.getDamage() / 40);
 
     raycaster.setFromCamera({ x: 0, y: 0 }, camera);
     const hitEnemy = EnemyManager.raycastHit(raycaster);
     if (hitEnemy) {
       EnemyManager.damageEnemy(hitEnemy, WeaponSystem.getDamage());
+      return;
+    }
+
+    // 敵に当たらなかった場合、壁への着弾を判定して弾痕を残す
+    if (wallGroup) {
+      const wallHits = raycaster.intersectObject(wallGroup, true);
+      if (wallHits.length > 0) {
+        const hit = wallHits[0];
+        if (hit.face) {
+          const worldNormal = hit.face.normal.clone()
+            .transformDirection(hit.object.matrixWorld)
+            .normalize();
+          spawnBulletHole(hit.point, worldNormal);
+        }
+      }
     }
   }
 
-  el.btnFire.addEventListener('touchstart', (e) => { e.preventDefault(); attemptFire(); }, { passive: false });
-  el.btnFire.addEventListener('mousedown', attemptFire);
+  el.btnFire.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); attemptFire(); }, { passive: false });
+  el.btnFire.addEventListener('mousedown', (e) => { e.stopPropagation(); attemptFire(); });
 
-  SensorSystem.setOnFire(() => attemptFire());
+  // 画面のどこをタップしても発射できるようにする(振り上げジェスチャー廃止に伴う主要な発射手段)
+  el.canvasContainer.addEventListener('touchstart', (e) => { e.preventDefault(); attemptFire(); }, { passive: false });
+  el.canvasContainer.addEventListener('mousedown', attemptFire);
 
   // ---- プレイヤー被弾・敵撃破コールバック ----
   function onPlayerDamage(dmg) {
@@ -1577,7 +1960,8 @@ const EnemyManager = (() => {
     gameState = 'gameover';
     AudioSystem.playGameOver();
     const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
-    el.gameoverStats.textContent = `撃破数: ${EnemyManager.getTotalCount() - EnemyManager.getAliveCount()} / ${EnemyManager.getTotalCount()}   経過時間: ${elapsed}秒`;
+    const diffLabel = DIFFICULTY_PRESETS[selectedDifficulty]?.label || selectedDifficulty;
+    el.gameoverStats.textContent = `難易度: ${diffLabel}   撃破数: ${EnemyManager.getTotalCount() - EnemyManager.getAliveCount()} / ${EnemyManager.getTotalCount()}   経過時間: ${elapsed}秒`;
     showScreen(el.gameover);
   }
 
@@ -1585,7 +1969,8 @@ const EnemyManager = (() => {
     gameState = 'clear';
     AudioSystem.playClear();
     const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
-    el.clearStats.textContent = `クリアタイム: ${elapsed}秒`;
+    const diffLabel = DIFFICULTY_PRESETS[selectedDifficulty]?.label || selectedDifficulty;
+    el.clearStats.textContent = `難易度: ${diffLabel}   クリアタイム: ${elapsed}秒`;
     showScreen(el.clear);
   }
 
@@ -1612,6 +1997,10 @@ const EnemyManager = (() => {
 
     if (!sceneBuilt) buildScene();
 
+    // 前回プレイの弾痕をクリア
+    bulletHoles.forEach(bh => { scene.remove(bh.mesh); scene.remove(bh.scorch); });
+    bulletHoles = [];
+
     // プレイヤー状態リセット
     const startWorld = gridToWorld(PLAYER_START.gx, PLAYER_START.gy);
     playerPos.set(startWorld.x, 0, startWorld.z);
@@ -1622,13 +2011,13 @@ const EnemyManager = (() => {
     // 武器セット
     WeaponSystem.setWeapon(selectedWeapon);
 
-    // 敵リセット
+    // 敵リセット(選択された難易度を反映)
     EnemyManager.init(scene, ENEMY_SPAWNS, {
       onPlayerDamage,
       onEnemyKilled,
       getPlayerPos: () => playerPos,
       getPlayerGrid: () => worldToGrid(playerPos.x, playerPos.z),
-    });
+    }, selectedDifficulty);
     updateEnemyCountHud();
 
     // 開始時の向きを正面として校正
@@ -1664,6 +2053,7 @@ const EnemyManager = (() => {
 
       WeaponSystem.update(dt);
       EnemyManager.update(dt);
+      updateBulletHoles();
     }
 
     if (renderer && scene && camera) {
