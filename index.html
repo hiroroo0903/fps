@@ -115,10 +115,10 @@ html, body {
 .notice { color: var(--text-dim); font-size: 0.72rem; margin-top: 0.5rem; }
 .sub { color: var(--text-dim); font-size: 0.85rem; }
 
-.rotate-icon { font-size: 3rem; transform: rotate(90deg); }
+.rotate-icon { font-size: 3rem; }
 
 #screen-orientation-warning { display: none; z-index: 50; }
-@media (orientation: portrait) {
+@media (orientation: landscape) {
   #screen-orientation-warning { display: flex; }
 }
 
@@ -196,8 +196,8 @@ html, body {
 <!-- 縦持ち時の警告(横持ち固定) -->
 <div id="screen-orientation-warning" class="screen">
   <div class="rotate-icon">📱</div>
-  <p>iPhoneを横向きに構えてください</p>
-  <p class="sub">このゲームは横持ち(ランドスケープ)専用です</p>
+  <p>iPhoneを縦向きに構えてください</p>
+  <p class="sub">このゲームは縦持ち(ポートレート)専用です</p>
 </div>
 
 <!-- タイトル画面 -->
@@ -1316,8 +1316,8 @@ const EnemyManager = (() => {
   // ---- シーン構築(初回のみ) ----
   function buildScene() {
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x05070a);
-    scene.fog = new THREE.Fog(0x05070a, 6, 28);
+    scene.background = new THREE.Color(0xaab0a8);
+    scene.fog = new THREE.Fog(0xaab0a8, 14, 42);
 
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 100);
     camera.position.set(0, EYE_HEIGHT, 0);
@@ -1327,14 +1327,14 @@ const EnemyManager = (() => {
     renderer.setSize(window.innerWidth, window.innerHeight);
     el.canvasContainer.appendChild(renderer.domElement);
 
-    // 環境光(タクティカルな暗めのトーン)
-    const ambient = new THREE.AmbientLight(0x445544, 0.55);
+    // 環境光(ビル内の照明で満たされた明るいオフィストーン)
+    const ambient = new THREE.AmbientLight(0xffffff, 1.1);
     scene.add(ambient);
-    const hemi = new THREE.HemisphereLight(0x334433, 0x0a0a0a, 0.4);
+    const hemi = new THREE.HemisphereLight(0xdfe6da, 0x6b6b60, 0.9);
     scene.add(hemi);
 
-    // プレイヤーに追従するスポットライト(懐中電灯的な演出)
-    const flashlight = new THREE.SpotLight(0xfff2d0, 1.6, 14, Math.PI / 6, 0.5, 1.2);
+    // プレイヤーに追従する補助ライト(壁面の陰影を出す)
+    const flashlight = new THREE.SpotLight(0xfff2d0, 18, 16, Math.PI / 5, 0.6, 1.4);
     flashlight.position.set(0, 0, 0);
     camera.add(flashlight);
     flashlight.target.position.set(0, 0, -1);
@@ -1342,6 +1342,7 @@ const EnemyManager = (() => {
     scene.add(camera);
 
     buildMap();
+    buildCeilingLights();
     WeaponSystem.init(camera);
 
     raycaster = new THREE.Raycaster();
@@ -1358,15 +1359,87 @@ const EnemyManager = (() => {
     renderer.setSize(window.innerWidth, window.innerHeight);
   }
 
+  // ---- テクスチャ生成(外部画像ファイルに依存せず、Canvasで手続き的に生成) ----
+  function makeCanvasTexture(drawFn, size = 256) {
+    const canvas = document.createElement('canvas');
+    canvas.width = size; canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    drawFn(ctx, size);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    if ('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  function buildFloorTexture() {
+    return makeCanvasTexture((ctx, s) => {
+      ctx.fillStyle = '#9a978c';
+      ctx.fillRect(0, 0, s, s);
+      ctx.strokeStyle = '#716e63';
+      ctx.lineWidth = s * 0.035;
+      ctx.strokeRect(0, 0, s, s);
+      ctx.fillStyle = 'rgba(255,255,255,0.05)';
+      for (let i = 0; i < 5; i++) {
+        ctx.fillRect(Math.random() * s, Math.random() * s, s * 0.18, s * 0.18);
+      }
+    });
+  }
+
+  function buildWallTexture() {
+    return makeCanvasTexture((ctx, s) => {
+      ctx.fillStyle = '#c7c4b9';
+      ctx.fillRect(0, 0, s, s);
+      // 幅木(ビルの内壁らしい下部の帯)
+      ctx.fillStyle = '#8b8879';
+      ctx.fillRect(0, s * 0.88, s, s * 0.12);
+      // チェアレール(腰高の水平ライン)
+      ctx.fillStyle = '#aca998';
+      ctx.fillRect(0, s * 0.6, s, s * 0.02);
+      // パネル目地(左右の縦ライン)
+      ctx.fillStyle = 'rgba(0,0,0,0.12)';
+      ctx.fillRect(0, 0, s * 0.02, s);
+      ctx.fillRect(s * 0.98, 0, s * 0.02, s);
+      // 上部の明暗グラデーション(天井照明を受けている感じ)
+      const grad = ctx.createLinearGradient(0, 0, 0, s);
+      grad.addColorStop(0, 'rgba(255,255,255,0.08)');
+      grad.addColorStop(1, 'rgba(0,0,0,0.06)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, s, s);
+    });
+  }
+
+  function buildCeilingTexture() {
+    return makeCanvasTexture((ctx, s) => {
+      ctx.fillStyle = '#e9e6da';
+      ctx.fillRect(0, 0, s, s);
+      ctx.strokeStyle = '#bcb9ab';
+      ctx.lineWidth = s * 0.03;
+      ctx.strokeRect(0, 0, s, s);
+    });
+  }
+
   function buildMap() {
+    const floorTex = buildFloorTexture();
+    floorTex.repeat.set(GRID_SIZE, GRID_SIZE);
     const floorGeo = new THREE.PlaneGeometry(GRID_SIZE * CELL_SIZE, GRID_SIZE * CELL_SIZE);
-    const floorMat = new THREE.MeshStandardMaterial({ color: 0x1c231c, roughness: 0.95 });
+    const floorMat = new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.9 });
     const floor = new THREE.Mesh(floorGeo, floorMat);
     floor.rotation.x = -Math.PI / 2;
     scene.add(floor);
 
+    // 天井(オフィスビルの吸音タイル風)
+    const ceilingTex = buildCeilingTexture();
+    ceilingTex.repeat.set(GRID_SIZE, GRID_SIZE);
+    const ceilingMat = new THREE.MeshStandardMaterial({ map: ceilingTex, roughness: 0.95 });
+    const ceiling = new THREE.Mesh(floorGeo, ceilingMat);
+    ceiling.rotation.x = Math.PI / 2;
+    ceiling.position.y = WALL_HEIGHT;
+    scene.add(ceiling);
+
+    const wallTex = buildWallTexture();
     const wallGeo = new THREE.BoxGeometry(CELL_SIZE, WALL_HEIGHT, CELL_SIZE);
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0x33392f, roughness: 0.85 });
+    const wallMat = new THREE.MeshStandardMaterial({ map: wallTex, roughness: 0.85 });
     const wallGroup = new THREE.Group();
 
     for (let gy = 0; gy < GRID_SIZE; gy++) {
@@ -1387,6 +1460,33 @@ const EnemyManager = (() => {
       }
     }
     scene.add(wallGroup);
+  }
+
+  // ---- 天井の照明パネル(各部屋に配置、発光パネル+補助ポイントライト) ----
+  function buildCeilingLights() {
+    const fixtureMat = new THREE.MeshBasicMaterial({ color: 0xfff6e2 });
+
+    ROOMS.forEach((room) => {
+      const cx = room.x + room.w / 2;
+      const cy = room.y + room.h / 2;
+      const w = gridToWorld(cx, cy);
+
+      // 大きめの部屋には2つ配置(細長く配置してオフィス照明らしく)
+      const count = (room.w * room.h >= 30) ? 2 : 1;
+      for (let i = 0; i < count; i++) {
+        const offsetX = count === 2 ? (i === 0 ? -CELL_SIZE : CELL_SIZE) : 0;
+
+        const fixtureGeo = new THREE.PlaneGeometry(CELL_SIZE * 1.4, CELL_SIZE * 0.6);
+        const fixture = new THREE.Mesh(fixtureGeo, fixtureMat);
+        fixture.rotation.x = Math.PI / 2;
+        fixture.position.set(w.x + offsetX, WALL_HEIGHT - 0.03, w.z);
+        scene.add(fixture);
+
+        const light = new THREE.PointLight(0xfff2d0, 22, 15, 1.8);
+        light.position.set(w.x + offsetX, WALL_HEIGHT - 0.4, w.z);
+        scene.add(light);
+      }
+    });
   }
 
   // ---- 衝突判定つき移動 ----
