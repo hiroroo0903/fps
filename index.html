@@ -473,8 +473,8 @@ html, body {
 .fire-button:active { background: rgba(255, 59, 48, 0.5); }
 
 .strafe-button {
-  --strafe-size: 5.0rem;    /* ボタンの直径 */
-  --strafe-offset: 1.5rem;  /* 中央からの間隔 */
+  --strafe-size: 4.8rem;    /* 左右ボタンの直径 */
+  --strafe-offset: 1.75rem; /* 中央からの間隔 */
   position: absolute; bottom: 1.1rem;
   width: var(--strafe-size); height: var(--strafe-size);
   border-radius: 50%;
@@ -490,7 +490,7 @@ html, body {
 }
 /* 見た目より少し広い範囲で反応させて、押しやすくする */
 .strafe-button::after {
-  content: ''; position: absolute; inset: -0.3rem; border-radius: 50%;
+  content: ''; position: absolute; inset: -0.15rem; border-radius: 50%;
 }
 .strafe-button:active { background: rgba(219, 228, 214, 0.32); border-color: var(--accent); color: var(--accent); }
 .strafe-left { left: 50%; transform: translateX(calc(-1 * (var(--strafe-offset) + var(--strafe-size)))); }
@@ -508,16 +508,23 @@ html, body {
 }
 .btn-quit-mission:active { color: var(--danger); border-color: var(--danger); }
 .btn-quit-mission.hidden { display: none; }
+/* 後退ボタン: 左右ボタンのあいだ(親指が届く中央下) */
+.strafe-back {
+  left: 50%; --strafe-size: 2.8rem; font-size: 1.15rem;
+  transform: translateX(calc(var(--strafe-size) / -2));
+}
+/* リロードは後退ボタンの上に移す */
 .strafe-reload {
-  left: 50%; --strafe-size: 2.2rem; font-size: 1.0rem;
+  left: 50%; bottom: 5.1rem; --strafe-size: 2.4rem; font-size: 1.0rem;
   transform: translateX(calc(var(--strafe-size) / -2));
 }
 .strafe-right { left: 50%; transform: translateX(var(--strafe-offset)); }
 
 /* 画面幅が狭い端末では少しだけ小さくして、FIREボタンと重ならないようにする */
 @media (max-width: 380px) {
-  .strafe-button { --strafe-size: 4.4rem; --strafe-offset: 1.35rem; }
-  .strafe-reload { --strafe-size: 2.0rem; }
+  .strafe-button { --strafe-size: 4.2rem; --strafe-offset: 1.6rem; }
+  .strafe-back { --strafe-size: 2.6rem; }
+  .strafe-reload { --strafe-size: 2.2rem; }
 }
 
 /* スコープ(覗き撃ち) */
@@ -695,6 +702,7 @@ html, body {
   <div class="howto">
     <p>🏃 その場で駆け足 → 前進(激しく踏むほど速く走れる)</p>
     <p>◀▶ 画面下部のボタン → 横移動</p>
+    <p>▼ 中央のボタン → 後ろに下がる</p>
     <p>⟳ 中央のボタン → リロード(10発でマガジン切れ)</p>
     <p>⌨️ 矢印キー/WASD → 移動(PCでの操作用)</p>
     <p>📱 端末の向き → 視点</p>
@@ -886,8 +894,9 @@ html, body {
   </div>
 
   <button id="btn-strafe-left" class="strafe-button strafe-left" aria-label="左に移動">◀</button>
-  <button id="btn-reload" class="strafe-button strafe-reload" aria-label="リロード">⟳</button>
+  <button id="btn-move-back" class="strafe-button strafe-back" aria-label="後ろに下がる">▼</button>
   <button id="btn-strafe-right" class="strafe-button strafe-right" aria-label="右に移動">▶</button>
+  <button id="btn-reload" class="strafe-button strafe-reload" aria-label="リロード">⟳</button>
 
   <button id="btn-scope" class="scope-button" aria-label="スコープで覗く">
     <span class="scope-icon">◎</span><span>スコープ</span>
@@ -944,7 +953,9 @@ html, body {
 // 「見えている段」と「実際に立てる高さ」が必ず一致する。
 // ============================================================
 
-const CELL_SIZE = 4; // Three.js空間上の1マスのサイズ(unit)
+// 1マスのサイズ(unit)。マップ全体の広さはここで決まる。
+// 4.0 → 4.4 にすると、間取りはそのままで面積が約1.21倍になる。
+const CELL_SIZE = 4.4;
 
 // 登れる段差の上限(unit)。これを超える差は登れない(飛び降りは可能)。
 // 高所の縁が自動的に「壁」として機能し、階段・スロープ以外から上に行けなくなる。
@@ -3855,6 +3866,7 @@ const PvpSystem = (() => {
     btnStrafeLeft: document.getElementById('btn-strafe-left'),
     btnReload: document.getElementById('btn-reload'),
     btnStrafeRight: document.getElementById('btn-strafe-right'),
+    btnMoveBack: document.getElementById('btn-move-back'),
     ammoDisplay: document.getElementById('ammo-display'),
     ammoValue: document.getElementById('ammo-value'),
     btnRestartOver: document.getElementById('btn-restart-over'),
@@ -6103,6 +6115,7 @@ const PvpSystem = (() => {
   }
   bindHoldButton(el.btnStrafeLeft, 'left');
   bindHoldButton(el.btnStrafeRight, 'right');
+  bindHoldButton(el.btnMoveBack, 'back');
 
   // ---- リロードボタン(弾が残っていてもいつでも押せる) ----
   function tryReload() {
