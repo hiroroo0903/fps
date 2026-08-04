@@ -1114,10 +1114,17 @@ function findPath(start, goal) {
 
 const SensorSystem = (() => {
   // ---- 姿勢の定数 ----
-  const TILT_CORRECT_GAIN = 0.05;   // 1イベントあたりの重力補正の強さ(0〜1)
-  const TILT_SNAP_DEG = 25;         // これ以上ずれていたら一気に合わせる(起動直後など)
+  const TILT_CORRECT_GAIN = 0.06;   // 1イベントあたりの重力補正の強さ(0〜1)
+  const TILT_MAX_RATE_DEG = 6;      // 重力補正の最大速度 (度/秒)。
+                                    // これで補正が一気に効くことを防ぎ、画面が飛ばないようにする
+  const TILT_CALM_RATE = 60;        // これ以下の回転速度なら重力を全面的に信用する (度/秒)
+  const TILT_FAST_RATE = 300;       // これ以上の回転速度では重力補正を止める (度/秒)
+                                    // (腕を振って旋回すると遠心力で重力の推定が狂うため)
   const MAX_PITCH_DEG = 85;         // 視点の上下限界
   const YAW_FREEZE_DOT = 0.995;     // 前方ベクトルがほぼ真上/真下のとき yaw を凍結
+
+  // 左右の視点感度。1.0で端末の回転角と同じ。大きいほど少ない動きで大きく振り向ける。
+  const YAW_SENSITIVITY = 1.35;
 
   // ---- 足踏み検出の定数(実機で調整しやすいよう1か所にまとめる) ----
   const STEP_PEAK_TH = 1.6;         // 上下動のピーク閾値 (m/s^2)。小さいほど検出しやすい
@@ -1143,6 +1150,7 @@ const SensorSystem = (() => {
   const qScreen = new THREE.Quaternion();
   const qCorr = new THREE.Quaternion();
   const qDelta = new THREE.Quaternion();
+  const qIdentity = new THREE.Quaternion();
   const vOmega = new THREE.Vector3();
   const vUpDevice = new THREE.Vector3(0, 0, 1);  // 端末座標系での「上」(重力の逆向き)
   const vUpCam = new THREE.Vector3(0, 1, 0);     // カメラ座標系での「上」(実測)
@@ -1153,7 +1161,12 @@ const SensorSystem = (() => {
   // 校正オフセット(重力基準のヨー・ピッチ)
   let calYaw = 0;
   let calPitch = 0;
-  let lastYawRaw = 0;
+  // ヨーは ±180度で折り返さない「累積値」として持つ。
+  // 感度を掛けたときに、真後ろを向いた瞬間に値が飛ぶのを防ぐため。
+  let yawAccum = 0;
+  let yawRawPrev = null;
+  let lastRotMagDeg = 0;   // 直近の回転速度(重力補正の信頼度に使う)
+  let lastOrientTime = null;
 
   function screenOrientationAngle() {
     if (screen.orientation && typeof screen.orientation.angle === 'number') {
@@ -1213,6 +1226,7 @@ const SensorSystem = (() => {
       tiltErrorDeg: 0,   // 重力補正で修正している角度
       usingLinearAcc: false,
       gyroActive: false,
+      tiltTrust: 1,
     },
   };
 
@@ -1233,10 +1247,20 @@ const SensorSystem = (() => {
     const pitchRaw = Math.asin(THREE.MathUtils.clamp(vForward.y, -1, 1));
     // 真上・真下付近では方位が定義できない(ジンバルロック)。直前の値を保持して暴れを防ぐ。
     if (Math.abs(vForward.y) < YAW_FREEZE_DOT) {
-      lastYawRaw = Math.atan2(-vForward.x, -vForward.z);
+      const yawRaw = Math.atan2(-vForward.x, -vForward.z);
+      if (yawRawPrev === null) {
+        yawRawPrev = yawRaw;
+      } else {
+        // 差分だけを取り出して累積する(-180/+180 の折り返しをまたいでも連続になる)
+        let d = yawRaw - yawRawPrev;
+        while (d > Math.PI) d -= Math.PI * 2;
+        while (d < -Math.PI) d += Math.PI * 2;
+        yawAccum += d;
+        yawRawPrev = yawRaw;
+      }
     }
 
-    let yaw = lastYawRaw - calYaw;
+    let yaw = (yawAccum - calYaw) * YAW_SENSITIVITY;
     while (yaw > Math.PI) yaw -= Math.PI * 2;
     while (yaw < -Math.PI) yaw += Math.PI * 2;
 
@@ -1290,15 +1314,32 @@ const SensorSystem = (() => {
 
     // ---- 相補フィルタ: 積算で溜まった傾きの誤差を重力で補正する ----
     // attitude はカメラ→ワールド。実測の上方向がワールドの上を向くように少しだけ回す。
+    //
+    // 【重要】ここで一気に補正すると、画面が上下にカクッと飛ぶ。とくに
+    //  ・腕を振って大きく旋回すると遠心力が加わり、重力の推定値が一時的に狂う
+    //  ・deviceorientation と devicemotion は時刻がそろっておらず、旋回中はズレが大きく出る
+    // ため、旋回が速いときほど補正を弱め、さらに補正速度そのものに上限を設ける。
+    const now = performance.now();
+    const dt = lastOrientTime === null ? 1 / 60 : Math.min((now - lastOrientTime) / 1000, 0.1);
+    lastOrientTime = now;
+
     vUpPred.copy(worldUp).applyQuaternion(attitude.clone().invert());
     const dot = THREE.MathUtils.clamp(vUpCam.dot(vUpPred), -1, 1);
     const errRad = Math.acos(dot);
     state.debug.tiltErrorDeg = THREE.MathUtils.radToDeg(errRad);
 
-    if (errRad > 1e-4) {
+    // 回転が速いほど重力を信用しない(0〜1)
+    const trust = THREE.MathUtils.clamp(
+      (TILT_FAST_RATE - lastRotMagDeg) / (TILT_FAST_RATE - TILT_CALM_RATE), 0, 1
+    );
+    state.debug.tiltTrust = trust;
+
+    if (errRad > 1e-4 && trust > 0) {
+      // 今回の補正量 = 誤差×ゲイン。ただし「度/秒」の上限でクリップする
+      const maxStep = THREE.MathUtils.degToRad(TILT_MAX_RATE_DEG) * dt;
+      const stepRad = Math.min(errRad * TILT_CORRECT_GAIN * trust, maxStep);
       qCorr.setFromUnitVectors(vUpCam, vUpPred);
-      const gain = errRad > THREE.MathUtils.degToRad(TILT_SNAP_DEG) ? 1 : TILT_CORRECT_GAIN;
-      if (gain < 1) qCorr.slerp(new THREE.Quaternion(), 1 - gain);
+      qCorr.slerp(qIdentity, 1 - stepRad / errRad);
       attitude.multiply(qCorr).normalize();
     }
     updateView();
@@ -1326,6 +1367,8 @@ const SensorSystem = (() => {
           THREE.MathUtils.degToRad(rot.alpha || 0)
         );
         deviceToCamera(vOmega);
+        // 重力補正の信頼度に使うため、回転の速さを記録しておく(急に変わらないよう平滑化)
+        lastRotMagDeg += 0.4 * (THREE.MathUtils.radToDeg(vOmega.length()) - lastRotMagDeg);
         const angle = vOmega.length() * dt;
         if (angle > 1e-7) {
           vOmega.normalize();
@@ -1433,7 +1476,7 @@ const SensorSystem = (() => {
   // 校正(視点リセット): いま構えている向き・上下の傾きを「正面・水平」にする
   function calibrate() {
     if (!attitudeReady) {
-      calYaw = 0; calPitch = 0;
+      calYaw = yawAccum; calPitch = 0;
       state.calibrated = true;
       updateView();
       return;
@@ -1441,9 +1484,16 @@ const SensorSystem = (() => {
     vForward.set(0, 0, -1).applyQuaternion(attitude);
     calPitch = Math.asin(THREE.MathUtils.clamp(vForward.y, -1, 1));
     if (Math.abs(vForward.y) < YAW_FREEZE_DOT) {
-      lastYawRaw = Math.atan2(-vForward.x, -vForward.z);
+      const yawRaw = Math.atan2(-vForward.x, -vForward.z);
+      if (yawRawPrev !== null) {
+        let d = yawRaw - yawRawPrev;
+        while (d > Math.PI) d -= Math.PI * 2;
+        while (d < -Math.PI) d += Math.PI * 2;
+        yawAccum += d;
+      }
+      yawRawPrev = yawRaw;
     }
-    calYaw = lastYawRaw;
+    calYaw = yawAccum;
     state.calibrated = true;
 
     // 足踏み検出もリセットしておく(構え直しの揺れを歩数に数えないため)
@@ -2096,7 +2146,7 @@ const ENEMY_TYPES = {
   },
   rusher: {
     label: 'ラッシャー', attack: 'melee', hp: 35, speed: 4.2, dmg: 10,
-    detectRange: 15, atkRange: 1.5, color: 0xff8844, size: 0.8,
+    detectRange: 15, atkRange: 1.5, color: 0xff8844, size: 1.0,
   },
   bruiser: {
     label: 'ブルーザー', attack: 'melee', hp: 130, speed: 1.4, dmg: 18,
@@ -2104,7 +2154,7 @@ const ENEMY_TYPES = {
   },
   sniper: {
     label: 'スナイパー', attack: 'ranged', hp: 30, speed: 1.25, dmg: 16,
-    detectRange: 20, atkRange: 16, color: 0x4488cc, size: 0.85,
+    detectRange: 20, atkRange: 16, color: 0x4488cc, size: 1.0,
     telegraphMs: 900, projectileSpeed: 14,
   },
   gunner: {
@@ -2119,7 +2169,7 @@ const ENEMY_TYPES = {
   },
   scout: {
     label: 'スカウト', attack: 'melee', hp: 20, speed: 5.2, dmg: 8,
-    detectRange: 18, atkRange: 1.4, color: 0xffbb33, size: 0.7,
+    detectRange: 18, atkRange: 1.4, color: 0xffbb33, size: 1.0,
   },
   guard: {
     label: 'ガード', attack: 'melee', hp: 120, speed: 1.25, dmg: 16,
@@ -2127,7 +2177,7 @@ const ENEMY_TYPES = {
   },
   skirmisher: {
     label: 'スカーミッシャー', attack: 'ranged', hp: 40, speed: 3.25, dmg: 10,
-    detectRange: 15, atkRange: 9, color: 0x66cccc, size: 0.9,
+    detectRange: 15, atkRange: 9, color: 0x66cccc, size: 1.0,
     telegraphMs: 550, projectileSpeed: 13,
   },
   juggernaut: {
@@ -4822,7 +4872,7 @@ const PvpSystem = (() => {
     const d = st.debug;
     el.sensorDebug.textContent =
       `YAW ${st.yawDeg.toFixed(0).padStart(4)}  PITCH ${st.pitchDeg.toFixed(0).padStart(4)}\n` +
-      `TILT-FIX ${d.tiltErrorDeg.toFixed(1)}deg  GYRO ${d.gyroActive ? 'ON' : 'OFF'}\n` +
+      `TILT-FIX ${d.tiltErrorDeg.toFixed(1)}deg  trust ${(d.tiltTrust * 100).toFixed(0)}%\n` +
       `STEP sig ${d.stepSignal.toFixed(2).padStart(6)}  peak ${d.stepPeak.toFixed(2).padStart(5)}\n` +
       `RUN ${st.isRunning ? 'YES' : 'no '}  pow ${st.runIntensity.toFixed(2)}  ${d.stepsPerMin}/min\n` +
       `ACC ${d.usingLinearAcc ? 'linear' : 'incl-gravity'}`;
