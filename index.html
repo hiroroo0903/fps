@@ -26,7 +26,25 @@
   font-size: 16px;
 }
 
-* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+/* ゲーム中に文字が選択されたり、長押しでコピーのメニューが出たりしないようにする。
+   iOS Safari は user-select だけでは効かないので -webkit- 付きの指定と
+   -webkit-touch-callout を必ずセットで指定する必要がある。 */
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* 対戦コードの入出力欄だけは、コピー・貼り付けのために選択できるようにする */
+textarea, input {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
 
 html, body {
   margin: 0; padding: 0;
@@ -37,7 +55,9 @@ html, body {
   overflow: hidden;
   overscroll-behavior: none;
   touch-action: none;
+  -webkit-user-select: none;
   user-select: none;
+  -webkit-touch-callout: none;
 }
 
 #canvas-container {
@@ -724,125 +744,166 @@ html, body {
 // ============================================================
 // mapdata.js
 // 固定の手作りマップレイアウトをグリッドとして定義する。
-// グリッドは 32x32 (1マス4unit = 128x128unit)。0 = 壁, 1 = 床。
+// グリッドは 26x26 (1マス4unit = 104x104unit)。0 = 壁, 1 = 床。
 //
-// ---- マップ設計 ----
-//   北西  A スタートルーム
-//   北    B ビル1階(屋内)  →  その南側の屋上が 2Fデッキ + ベランダ
-//   北東  C 東の部屋
-//   西    D 西の部屋(2Fへ上がる階段の起点)
-//   東    E 東の縦通路
-//   中央  F 長い直線通路(東西84unit。撃ち合い用のレーン)
-//   南西  H 南西の部屋
-//   南    G 広い庭(車・トラック・木箱・柱を配置、中央に見張り台)
-//   裏道  3本のダクト(1マス幅の細い近道)
+// ---- 設計の考え方 ----
+// 「広くて平らな空間」を作らないことを最優先にしている。
+//   ・部屋は最大でも 7x4 程度。庭も塔・低い台・車両・壁の出っ張りで細かく分断する
+//   ・高さを 0 / 1.1 / 1.6 / 2.2 / 3.2 の5段階にして、どこにいても高低差が絡む
+//   ・WALL_BLOCK_CELLS で部屋の中に壁の出っ張りを作り、曲がり角を増やす
+//
+//   北西 A スタートルーム      北 B ビル1階      北東 C 東の部屋(L字)
+//   西   D 西の部屋            東 E 東の縦通路
+//   中央 F 長い直線通路(64unit。撃ち合い用のレーン)
+//   南西 H 南西の部屋          南 G 庭(塔・低い台で段差だらけ)  南東 I 東の庭(高台つき)
+//   高所 2Fデッキ+ベランダ(3.2m) / 見張り台(2.2m) / 低い台(1.1m, 1.6m)
+//   裏道 3本のダクト(1マス幅)。duct1は2Fデッキから飛び降りて入ることもできる
 //
 // ---- 高さについて ----
-// 高さは HEIGHT_ZONES で管理する。ゾーンの範囲は「セル番号の閉区間」で指定し、
+// 高さは HEIGHT_ZONES で管理する。範囲は「セル番号の閉区間」で指定し、
 // 内部ではグリッド浮動小数座標の [gx0, gx1+1] × [gy0, gy1+1] として扱う。
-// こうしないとゾーンの端1マス分の高さが抜け落ち、床が突然消える(=表示バグ)。
-// ランプ(階段・はしご)は axis で向きを明示し、その区間の端から端まで
-// 連続的に高さが変化する。見た目の階段もまったく同じ式で生成するため、
+// ランプ(階段・スロープ)は axis で向きを明示し、区間の端から端まで連続的に変化する。
+// 見た目の階段もまったく同じ式で生成するため、
 // 「見えている段」と「実際に立てる高さ」が必ず一致する。
 // ============================================================
 
-const GRID_SIZE = 32;
+const GRID_SIZE = 26;
 const CELL_SIZE = 4; // Three.js空間上の1マスのサイズ(unit)
 
-// 登れる段差の上限(unit)。これを超える高さの差は登れない(飛び降りは可能)。
-// 高所エリアの縁が「壁」として機能し、階段・はしご以外から上に行けなくなる。
+// 登れる段差の上限(unit)。これを超える差は登れない(飛び降りは可能)。
+// 高所の縁が自動的に「壁」として機能し、階段・スロープ以外から上に行けなくなる。
 const MAX_STEP_UP = 0.45;
 
-// 部屋の矩形定義 [x, y, w, h] (グリッド座標、外周1マスは常に壁として残す)
+// 高さの段階
+const DECK_HEIGHT  = 3.2; // 2Fデッキ・ベランダ(壁と同じ高さ = ビルの屋上)
+const TOWER_HEIGHT = 2.2; // 見張り台。高すぎると上が有利になりすぎるため控えめ
+const LEDGE_HEIGHT = 1.6; // 東の庭の高台
+const PAD_HEIGHT   = 1.1; // 庭の低い台
+
+// 部屋の矩形定義 [x, y, w, h]
 const ROOMS = [
-  { id: 'A', x: 2,  y: 2,  w: 6,  h: 5,  name: 'スタートルーム' },
-  { id: 'B', x: 11, y: 2,  w: 9,  h: 5,  name: 'ビル1階' },
-  { id: 'C', x: 24, y: 2,  w: 7,  h: 7,  name: '東の部屋' },
-  { id: 'D', x: 2,  y: 8,  w: 4,  h: 7,  name: '西の部屋' },
-  { id: 'E', x: 26, y: 10, w: 5,  h: 8,  name: '東の縦通路' },
-  { id: 'F', x: 4,  y: 16, w: 21, h: 2,  name: '長い直線通路' },
-  { id: 'G', x: 11, y: 20, w: 20, h: 11, name: '広い庭' },
-  { id: 'H', x: 2,  y: 21, w: 7,  h: 7,  name: '南西の部屋' },
+  { id: 'A', x: 2,  y: 2,  w: 5,  h: 4, name: 'スタートルーム' },
+  { id: 'B', x: 9,  y: 2,  w: 6,  h: 4, name: 'ビル1階' },
+  { id: 'C', x: 17, y: 2,  w: 7,  h: 4, name: '東の部屋' },
+  { id: 'D', x: 2,  y: 8,  w: 4,  h: 5, name: '西の部屋' },
+  { id: 'E', x: 20, y: 8,  w: 3,  h: 9, name: '東の縦通路' },
+  { id: 'F', x: 3,  y: 15, w: 16, h: 2, name: '長い直線通路' },
+  { id: 'G', x: 8,  y: 19, w: 11, h: 6, name: '庭' },
+  { id: 'H', x: 2,  y: 19, w: 5,  h: 5, name: '南西の部屋' },
+  { id: 'I', x: 20, y: 18, w: 5,  h: 6, name: '東の庭' },
 ];
 
-// 通路の矩形定義(部屋同士をつなぐ。ここにはドア枠が生成される)
+// 通路の矩形定義(部屋同士をつなぐ。ここにドア枠が生成される)
 const CORRIDORS = [
-  { x: 8,  y: 3,  w: 3, h: 2 }, // A - B
-  { x: 3,  y: 7,  w: 2, h: 1 }, // A - D
-  { x: 20, y: 3,  w: 4, h: 2 }, // B - C
-  { x: 27, y: 9,  w: 3, h: 1 }, // C - E
-  { x: 6,  y: 10, w: 2, h: 2 }, // D - 階段の下
-  { x: 4,  y: 15, w: 2, h: 1 }, // D - F
-  { x: 25, y: 17, w: 1, h: 1 }, // F - E
-  { x: 20, y: 18, w: 2, h: 2 }, // F - G(庭)
-  { x: 7,  y: 18, w: 2, h: 3 }, // F - H
-  { x: 9,  y: 24, w: 2, h: 2 }, // H - G(庭)
+  { x: 7,  y: 3,  w: 2, h: 2 }, // A - B
+  { x: 3,  y: 6,  w: 2, h: 2 }, // A - D
+  { x: 15, y: 3,  w: 2, h: 2 }, // B - C
+  { x: 21, y: 6,  w: 2, h: 2 }, // C - E
+  { x: 18, y: 9,  w: 2, h: 2 }, // duct2の出口 - E
+  { x: 3,  y: 13, w: 2, h: 2 }, // D - F
+  { x: 19, y: 15, w: 1, h: 2 }, // F - E
+  { x: 12, y: 17, w: 2, h: 2 }, // F - G(庭)
+  { x: 4,  y: 17, w: 2, h: 2 }, // F - H
+  { x: 7,  y: 21, w: 1, h: 2 }, // H - G
+  { x: 19, y: 20, w: 1, h: 3 }, // G - I(倉庫の東側の搬入口)
+  { x: 21, y: 17, w: 2, h: 1 }, // E - I
 ];
 
-// 裏ルート(ダクト): 1マス幅の細い近道。天井が低く、通ると近道になる
+// 裏ルート(ダクト): 1マス幅の細い近道。天井が低い
 const DUCTS = [
-  // duct1: 西の部屋D → 南西の部屋H(長い直線通路を通らずに南下できる)
-  { x: 2,  y: 15, w: 1, h: 6 },
-  // duct2: ビル1階B → 東の縦通路E(東の部屋Cを迂回する)
-  { x: 20, y: 6,  w: 1, h: 1 },
-  { x: 21, y: 6,  w: 1, h: 5 },
-  { x: 22, y: 10, w: 4, h: 1 },
-  // duct3: 東の縦通路E → 庭G(庭の東側に直接出る)
-  { x: 29, y: 18, w: 1, h: 2 },
+  { x: 14, y: 6, w: 1, h: 9 },  // duct1: ビル1階B → 長い直線通路(2Fデッキから飛び降りても入れる)
+  { x: 18, y: 6, w: 1, h: 3 },  // duct2: C → 階段の下(東の縦通路を経由せずに降りられる)
+  { x: 24, y: 4, w: 1, h: 14 }, // duct3: C → 東の庭(マップ東端を縦断)
+  { x: 23, y: 17, w: 1, h: 1 }, // duct3の出口(東の庭の高台に直接は登れないので west へ回り込む)
 ];
 
-// 高所エリア(2階デッキ・ベランダ・階段・見張り台・はしご)。
-// MAP_GRID上は歩行可能として彫るが、高さはHEIGHT_ZONESで管理する。
+// 高所エリア。MAP_GRID上は歩行可能として彫り、高さはHEIGHT_ZONESで管理する
 const ELEVATED_CORRIDORS = [
-  { x: 11, y: 8,  w: 9, h: 6 }, // 2Fデッキ(ビルの屋上)
-  { x: 14, y: 14, w: 4, h: 2 }, // ベランダ(長い直線通路を見下ろす張り出し)
-  { x: 8,  y: 10, w: 3, h: 2 }, // 2Fへの階段
-  { x: 21, y: 24, w: 3, h: 3 }, // 見張り台
-  { x: 22, y: 27, w: 1, h: 2 }, // 見張り台へのはしご階段
+  { x: 9,  y: 7,  w: 5, h: 6 }, // 2Fデッキ(ビルの屋上)
+  { x: 10, y: 13, w: 3, h: 2 }, // ベランダ(長い直線通路を見下ろす張り出し)
+  { x: 6,  y: 10, w: 3, h: 2 }, // 2Fへの階段(西の部屋Dから上がる)
+  { x: 15, y: 20, w: 3, h: 3 }, // 見張り台(庭の中央)
+  { x: 14, y: 21, w: 1, h: 1 }, // 見張り台への西のはしご段
+  { x: 18, y: 21, w: 1, h: 1 }, // 見張り台の東の降り口(反対側)
+  { x: 9,  y: 20, w: 3, h: 2 }, // 庭の低い台
+  { x: 12, y: 20, w: 1, h: 2 }, // 低い台へのスロープ
+  { x: 22, y: 18, w: 3, h: 2 }, // 東の庭の高台
+  { x: 22, y: 20, w: 3, h: 1 }, // 高台へのスロープ
 ];
 
-// 高さゾーン。範囲はセル番号の閉区間(内部で [gx0, gx1+1] の浮動小数区間として扱う)。
-//  type 'flat' : 一定の高さ
-//  type 'ramp' : axis 方向に h0 → h1 へ連続的に変化する(階段・はしご)
-const DECK_HEIGHT = 3.2;   // 壁と同じ高さ = ビルの屋上
-const TOWER_HEIGHT = 2.2;  // 見張り台。高すぎると上が有利になりすぎるため控えめ
+// 高さゾーン。範囲はセル番号の閉区間
 const HEIGHT_ZONES = [
-  { id: 'deck',    type: 'flat', gx0: 11, gy0: 8,  gx1: 19, gy1: 13, height: DECK_HEIGHT,
+  { id: 'deck',    type: 'flat', gx0: 9,  gy0: 7,  gx1: 13, gy1: 12, height: DECK_HEIGHT,
     support: 'solid', railHeight: 1.05 },
-  { id: 'balcony', type: 'flat', gx0: 14, gy0: 14, gx1: 17, gy1: 15, height: DECK_HEIGHT,
-    support: 'solid', railHeight: 1.05, openSides: ['south'] },
-  { id: 'stairs',  type: 'ramp', axis: 'x', gx0: 8,  gy0: 10, gx1: 10, gy1: 11,
+  { id: 'balcony', type: 'flat', gx0: 10, gy0: 13, gx1: 12, gy1: 14, height: DECK_HEIGHT,
+    support: 'solid', railHeight: 1.05, openSides: ['south', 'east', 'west'],
+    // 神殿風の列柱。手すりの代わりに柱が並び、その間から下を狙える
+    colonnade: { columnHeight: 2.9, spacing: 5.0, pediment: true } },
+  { id: 'stairs',  type: 'ramp', axis: 'x', gx0: 6,  gy0: 10, gx1: 8,  gy1: 11,
     h0: 0, h1: DECK_HEIGHT, style: 'stairs' },
-  { id: 'tower',   type: 'flat', gx0: 21, gy0: 24, gx1: 23, gy1: 26, height: TOWER_HEIGHT,
+  { id: 'tower',   type: 'flat', gx0: 15, gy0: 20, gx1: 17, gy1: 22, height: TOWER_HEIGHT,
     support: 'container', railHeight: 0.9 },
-  { id: 'ladder',  type: 'ramp', axis: 'y', gx0: 22, gy0: 27, gx1: 22, gy1: 28,
+  { id: 'towerW',  type: 'ramp', axis: 'x', gx0: 14, gy0: 21, gx1: 14, gy1: 21,
+    h0: 0, h1: TOWER_HEIGHT, style: 'ladder' },
+  { id: 'towerE',  type: 'ramp', axis: 'x', gx0: 18, gy0: 21, gx1: 18, gy1: 21,
     h0: TOWER_HEIGHT, h1: 0, style: 'ladder' },
+  { id: 'pad',     type: 'flat', gx0: 9,  gy0: 20, gx1: 11, gy1: 21, height: PAD_HEIGHT,
+    support: 'container', railHeight: 0.55 },
+  { id: 'padramp', type: 'ramp', axis: 'x', gx0: 12, gy0: 20, gx1: 12, gy1: 21,
+    h0: PAD_HEIGHT, h1: 0, style: 'ladder' },
+  { id: 'ledge',   type: 'flat', gx0: 22, gy0: 18, gx1: 24, gy1: 19, height: LEDGE_HEIGHT,
+    support: 'container', railHeight: 0.7, openSides: ['west'] },
+  { id: 'ledgeramp', type: 'ramp', axis: 'y', gx0: 22, gy0: 20, gx1: 24, gy1: 20,
+    h0: LEDGE_HEIGHT, h1: 0, style: 'ladder' },
 ];
 
-// 遮蔽物(木箱)。視線と移動を遮る。曲がり角を作るために意図的に配置する
+// 部屋の中に置く壁の出っ張り。曲がり角を作り、平らで見通しの良い空間をなくす
+const WALL_BLOCK_CELLS = [
+  { gx: 20, gy: 2 }, { gx: 20, gy: 3 },  // 東の部屋CをL字にする
+  { gx: 12, gy: 2 },                      // ビル1階Bに柱状の仕切り
+  { gx: 4,  gy: 21 },                     // 南西の部屋Hに曲がり角
+  { gx: 9,  gy: 22 }, { gx: 9,  gy: 23 }, // 庭の西側の仕切り
+  { gx: 14, gy: 24 },                     // 庭の南の仕切り
+  { gx: 13, gy: 19 }, { gx: 13, gy: 23 },                     // 倉庫の西壁(y20-22が搬入口)
+  { gx: 15, gy: 24 }, { gx: 16, gy: 24 }, { gx: 17, gy: 24 }, { gx: 18, gy: 24 }, // 倉庫の南壁
+  { gx: 3,  gy: 10 },                     // 西の部屋D
+];
+
+// 遮蔽物(木箱)。視線と移動を遮る
 const OBSTACLE_CELLS = [
-  // 北エリア
-  { gx: 5,  gy: 4 },  { gx: 13, gy: 4 }, { gx: 17, gy: 3 },
-  { gx: 26, gy: 4 },  { gx: 29, gy: 6 },
-  // 西
-  { gx: 3,  gy: 10 }, { gx: 4,  gy: 13 },
-  // 東の縦通路
-  { gx: 28, gy: 12 }, { gx: 27, gy: 15 }, { gx: 27, gy: 17 }, { gx: 28, gy: 7 },
-  // 長い直線通路(交互に置いて、一直線の撃ち合いに逃げ場を作る)
-  { gx: 9,  gy: 16 }, { gx: 14, gy: 17 }, { gx: 19, gy: 16 }, { gx: 22, gy: 17 },
+  { gx: 5,  gy: 4 },  { gx: 10, gy: 4 }, { gx: 14, gy: 2 },
+  { gx: 18, gy: 4 },  { gx: 22, gy: 3 }, { gx: 23, gy: 5 },
+  { gx: 5,  gy: 9 },  { gx: 2,  gy: 12 },
+  { gx: 21, gy: 10 }, { gx: 20, gy: 13 }, { gx: 22, gy: 16 },
+  // 長い直線通路(交互に置いて逃げ場を作る)
+  { gx: 6,  gy: 15 }, { gx: 9,  gy: 16 }, { gx: 12, gy: 16 }, { gx: 17, gy: 16 },
+  { gx: 18, gy: 15 },
   // 南西の部屋
-  { gx: 4,  gy: 23 }, { gx: 7,  gy: 26 },
+  { gx: 2,  gy: 19 }, { gx: 6,  gy: 23 },
   // 庭
-  { gx: 13, gy: 22 }, { gx: 16, gy: 26 }, { gx: 19, gy: 29 }, { gx: 25, gy: 21 },
-  { gx: 28, gy: 23 }, { gx: 29, gy: 28 }, { gx: 14, gy: 29 }, { gx: 26, gy: 29 },
-  { gx: 29, gy: 21 },
+  { gx: 11, gy: 22 }, { gx: 12, gy: 19 }, { gx: 15, gy: 19 }, { gx: 15, gy: 23 },
+  { gx: 17, gy: 19 },
+  // 東の庭
+  { gx: 20, gy: 23 }, { gx: 24, gy: 23 },
 ];
 
-// 車両(景観・遮蔽物)。kind: 'truck' | 'car'。cells は2マス分の footprint
+// 建物の外殻(壁の上部の帯 + 天井)。ここで囲われた範囲は「屋内」になる。
+// 外周のセルは通常の壁として描画されるので、その上に帯と天井を足して屋内らしくする。
+const BUILDINGS = [
+  {
+    id: 'warehouse', name: '倉庫(見張り台のある建物)',
+    gx0: 13, gy0: 18, gx1: 19, gy1: 24,       // 外周(壁のライン)
+    inner: { gx0: 14, gy0: 19, gx1: 18, gy1: 23 }, // 屋内の床
+    wallTop: 4.9, roofThickness: 0.4,
+    color: 0x8b8676, roofColor: 0x5d5850, trussColor: 0x4a4640,
+  },
+];
+
+// 車両(景観・遮蔽物)
 const VEHICLES = [
-  { kind: 'truck', cells: [{ gx: 17, gy: 23 }, { gx: 18, gy: 23 }], color: 0x5a6058 },
-  { kind: 'car',   cells: [{ gx: 26, gy: 26 }, { gx: 27, gy: 26 }], color: 0x7a2828 },
-  { kind: 'car',   cells: [{ gx: 12, gy: 27 }, { gx: 13, gy: 27 }], color: 0x2c4a6a },
+  { kind: 'truck', cells: [{ gx: 10, gy: 24 }, { gx: 11, gy: 24 }], color: 0x5a6058 },
+  { kind: 'car',   cells: [{ gx: 9,  gy: 19 }, { gx: 10, gy: 19 }], color: 0x7a2828 },
+  { kind: 'car',   cells: [{ gx: 20, gy: 22 }, { gx: 21, gy: 22 }], color: 0x2c4a6a },
 ];
 
 function buildGrid() {
@@ -889,7 +950,7 @@ function zoneBoundsGrid(zone) {
   return { x0: zone.gx0, x1: zone.gx1 + 1, y0: zone.gy0, y1: zone.gy1 + 1 };
 }
 
-// 指定したグリッド座標(小数)の地面の高さ。階段は連続的に、平らな場所は一定
+// 指定したグリッド座標(小数)の地面の高さ
 function getGroundHeightAtGrid(gx, gy) {
   let best = 0;
   for (const zone of HEIGHT_ZONES) {
@@ -915,7 +976,8 @@ function getGroundHeightAt(worldX, worldZ) {
   return getGroundHeightAtGrid(worldX / CELL_SIZE + GRID_SIZE / 2, worldZ / CELL_SIZE + GRID_SIZE / 2);
 }
 
-// 遮蔽物・車両の区画を通行不可にする(構造壁とは別扱い。描画は専用)
+// 壁の出っ張り・遮蔽物・車両の区画を通行不可にする
+WALL_BLOCK_CELLS.forEach((o) => { MAP_GRID[o.gy][o.gx] = 0; });
 OBSTACLE_CELLS.forEach((o) => { MAP_GRID[o.gy][o.gx] = 0; });
 VEHICLES.forEach((v) => { v.cells.forEach((c) => { MAP_GRID[c.gy][c.gx] = 0; }); });
 
@@ -948,40 +1010,40 @@ function computeDoorways() {
 const DOORWAYS = computeDoorways();
 
 // プレイヤー開始位置(スタートルームA)
-const PLAYER_START = { gx: 4, gy: 4 };
+const PLAYER_START = { gx: 3, gy: 3 };
 
-// 対戦モード(2人)用のスポーン地点。ゲストは庭側(マップの反対側)
-const PVP_SPAWN_HOST = { gx: 4, gy: 4 };
-const PVP_SPAWN_GUEST = { gx: 24, gy: 29 };
+// 対戦モード(2人)用のスポーン地点。ゲストは東の庭(マップの反対側)
+const PVP_SPAWN_HOST = { gx: 3, gy: 3 };
+const PVP_SPAWN_GUEST = { gx: 22, gy: 23 };
 
-// 敵スポーン定義: 10種類、各1体
+// 敵スポーン定義: 10種類、各1体。高さの違う場所に散らす
 const ENEMY_SPAWNS = [
-  { type: 'grunt',      gx: 13, gy: 3,  room: 'B' },
-  { type: 'rusher',     gx: 4,  gy: 11, room: 'D' },
-  { type: 'bruiser',    gx: 16, gy: 17, room: 'F' },
-  { type: 'sniper',     gx: 15, gy: 14, room: 'ベランダ' },
-  { type: 'gunner',     gx: 27, gy: 4,  room: 'C' },
-  { type: 'heavy',      gx: 28, gy: 14, room: 'E' },
-  { type: 'scout',      gx: 14, gy: 22, room: 'G' },
-  { type: 'guard',      gx: 5,  gy: 24, room: 'H' },
-  { type: 'skirmisher', gx: 22, gy: 25, room: '見張り台' },
-  { type: 'juggernaut', gx: 20, gy: 27, room: 'G' },
+  { type: 'grunt',      gx: 11, gy: 3,  room: 'B' },
+  { type: 'rusher',     gx: 3,  gy: 11, room: 'D' },
+  { type: 'bruiser',    gx: 11, gy: 16, room: 'F' },
+  { type: 'sniper',     gx: 11, gy: 14, room: 'ベランダ' },
+  { type: 'gunner',     gx: 22, gy: 4,  room: 'C' },
+  { type: 'heavy',      gx: 21, gy: 14, room: 'E' },
+  { type: 'scout',      gx: 11, gy: 20, room: '庭の低い台' },
+  { type: 'guard',      gx: 4,  gy: 22, room: 'H' },
+  { type: 'skirmisher', gx: 16, gy: 21, room: '見張り台' },
+  { type: 'juggernaut', gx: 16, gy: 23, room: '倉庫内' },
 ];
 
 // --- チーム戦モード(疑似5vs5)用のスポーン ---
 const TEAM_ENEMY_SPAWNS = [
-  { type: 'grunt',   gx: 27, gy: 4,  room: 'C' },
-  { type: 'bruiser', gx: 18, gy: 16, room: 'F' },
-  { type: 'sniper',  gx: 17, gy: 10, room: '2Fデッキ' },
-  { type: 'gunner',  gx: 28, gy: 14, room: 'E' },
-  { type: 'scout',   gx: 25, gy: 23, room: 'G' },
+  { type: 'grunt',   gx: 22, gy: 4,  room: 'C' },
+  { type: 'bruiser', gx: 16, gy: 15, room: 'F' },
+  { type: 'sniper',  gx: 11, gy: 9,  room: '2Fデッキ' },
+  { type: 'gunner',  gx: 21, gy: 12, room: 'E' },
+  { type: 'scout',   gx: 23, gy: 19, room: '東の庭の高台' },
 ];
 
 // 味方チーム(AI、プレイヤーの周囲=スタートルームに配置)
 const TEAM_ALLY_SPAWNS = [
-  { type: 'assault',  gx: 3, gy: 3 },
-  { type: 'scout',    gx: 6, gy: 3 },
-  { type: 'heavy',    gx: 3, gy: 5 },
+  { type: 'assault',  gx: 2, gy: 2 },
+  { type: 'scout',    gx: 4, gy: 2 },
+  { type: 'heavy',    gx: 2, gy: 4 },
   { type: 'marksman', gx: 6, gy: 5 },
 ];
 
@@ -1004,9 +1066,7 @@ function isWalkable(gx, gy) {
   return MAP_GRID[gy][gx] === 1;
 }
 
-// 高さの差による移動制限。登れるのは MAX_STEP_UP まで(飛び降りは自由)。
-// これにより、2Fデッキや見張り台の縁が「壁」として機能し、
-// 階段・はしご以外から高所に上がれなくなる(=高さが突然飛ぶ表示バグを防ぐ)。
+// 高さの差による移動制限。登れるのは MAX_STEP_UP まで(飛び降りは自由)
 function canStepUp(fromX, fromZ, toX, toZ) {
   return getGroundHeightAt(toX, toZ) - getGroundHeightAt(fromX, fromZ) <= MAX_STEP_UP;
 }
@@ -3523,9 +3583,10 @@ const PvpSystem = (() => {
     buildMap();
     buildDoorframes();
     buildColumns();
-    buildCrates();
+    buildObstacles();
     buildVehicles();
     buildElevatedStructures();
+    buildEnclosures();
     buildDuctProps();
     buildMinimapStatic();
     WeaponSystem.init(camera);
@@ -3773,7 +3834,7 @@ const PvpSystem = (() => {
     ROOMS.forEach((room) => {
       // 幅の狭い通路には柱を置かない(通れなくなるため)
       if (Math.min(room.w, room.h) < 4) return;
-      if (room.w * room.h < 30) return;
+      if (room.w * room.h < 20) return;
       const nx = Math.max(1, Math.min(3, Math.round(room.w / 6)));
       const ny = Math.max(1, Math.min(3, Math.round(room.h / 6)));
       for (let i = 1; i <= nx; i++) {
@@ -3798,21 +3859,233 @@ const PvpSystem = (() => {
     });
   }
 
-  // ---- 遮蔽物(クレート): 部屋内に置かれた戦術的な障害物。視線と移動を遮る ----
-  function buildCrates() {
-    const crateMat = new THREE.MeshStandardMaterial({ color: 0x9a6a2f, roughness: 0.9 });
-    const trimMat = new THREE.MeshStandardMaterial({ color: 0x4a3418, roughness: 0.8 });
-    const crateGeo = new THREE.BoxGeometry(CELL_SIZE * 0.82, 1.3, CELL_SIZE * 0.82);
+  // ---- 神殿風の列柱(ベランダ) ----
+  // 手すりの代わりに柱を並べ、その上に梁(エンタブラチュア)と破風(ペディメント)を載せる。
+  // 柱の間から下の通路を狙えるので、遮蔽としても機能する。
+  function buildColonnade(zone, mats) {
+    const cfg = zone.colonnade;
+    const b = zoneWorldBounds(zone);
+    const baseY = zone.height;
+    const colH = cfg.columnHeight;
+    const radius = 0.34;
+    const inset = 0.55; // 縁から少し内側に立てる
+
+    const x0 = b.minX + inset, x1 = b.maxX - inset;
+    const z0 = b.minZ + inset, z1 = b.maxZ - inset;
+
+    // 柱の位置: 北側(2Fデッキとの接続部)以外の縁に等間隔で並べる
+    const spots = [];
+    const nx = Math.max(2, Math.round((x1 - x0) / cfg.spacing) + 1);
+    for (let i = 0; i < nx; i++) spots.push([x0 + (x1 - x0) * i / (nx - 1), z1]); // 南面
+    spots.push([x0, (z0 + z1) / 2]); // 西面の中間
+    spots.push([x1, (z0 + z1) / 2]); // 東面の中間
+
+    spots.forEach(([px, pz]) => {
+      // 礎盤
+      const base = new THREE.Mesh(new THREE.BoxGeometry(radius * 2.6, 0.22, radius * 2.6), mats.stone);
+      base.position.set(px, baseY + 0.11, pz);
+      wallGroup.add(base);
+      // 柱身(溝彫りに見えるよう分割数を粗めにする)
+      const shaft = new THREE.Mesh(
+        new THREE.CylinderGeometry(radius * 0.86, radius, colH - 0.5, 12), mats.stone);
+      shaft.position.set(px, baseY + 0.22 + (colH - 0.5) / 2, pz);
+      wallGroup.add(shaft);
+      // 柱頭
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(radius * 2.8, 0.28, radius * 2.8), mats.stoneLight);
+      cap.position.set(px, baseY + colH - 0.14, pz);
+      wallGroup.add(cap);
+      // 礎盤の分まで含めて当たり判定を持たせ、柱の中にめり込まないようにする
+      columnObstacles.push({ x: px, z: pz, radius: radius * 1.4 });
+    });
+
+    // 梁(エンタブラチュア): 南・東・西の三辺に回す
+    const beamY = baseY + colH + 0.24;
+    const beam = (ax, az, bx, bz, thick) => {
+      const len = Math.hypot(bx - ax, bz - az);
+      const m = new THREE.Mesh(new THREE.BoxGeometry(len, 0.48, thick), mats.stoneLight);
+      m.position.set((ax + bx) / 2, beamY, (az + bz) / 2);
+      m.rotation.y = Math.atan2(-(bz - az), bx - ax);
+      wallGroup.add(m);
+    };
+    beam(x0 - 0.4, z1, x1 + 0.4, z1, 0.9);
+    beam(x0, z0 - 0.4, x0, z1 + 0.4, 0.9);
+    beam(x1, z0 - 0.4, x1, z1 + 0.4, 0.9);
+
+    // 破風(ペディメント): 南面に三角形の妻壁を載せる
+    if (cfg.pediment) {
+      const w = (x1 - x0) / 2 + 0.6;
+      const h = 1.25;
+      const shape = new THREE.Shape();
+      shape.moveTo(-w, 0); shape.lineTo(w, 0); shape.lineTo(0, h); shape.lineTo(-w, 0);
+      const geo = new THREE.ExtrudeGeometry(shape, { depth: 0.7, bevelEnabled: false });
+      geo.translate(0, 0, -0.35);
+      const ped = new THREE.Mesh(geo, mats.stoneLight);
+      ped.position.set((x0 + x1) / 2, beamY + 0.24, z1);
+      wallGroup.add(ped);
+      // 屋根の傾斜(妻壁から北へ伸びる薄い庇)
+      const eaveLen = Math.hypot((z1 - z0) / 2 + 0.6, h);
+      [-1, 1].forEach((side) => {
+        const eave = new THREE.Mesh(new THREE.BoxGeometry(w * 1.05, 0.16, 1.1), mats.stone);
+        eave.position.set((x0 + x1) / 2 + side * w / 2, beamY + 0.24 + h / 2, z1 - 0.1);
+        eave.rotation.z = side * Math.atan2(h, w) * -1;
+        wallGroup.add(eave);
+      });
+      void eaveLen;
+    }
+  }
+
+  // ---- 建物の外殻(壁の上部の帯 + 天井) ----
+  // 外周のセルは通常の壁(高さ3.2)として描かれているので、その上に帯を足して高くし、
+  // 天井を載せることで「屋内」にする。出入口の上は自然に まぐさ(リンテル)になる。
+  function buildEnclosures() {
+    const gw = (g) => (g - GRID_SIZE / 2) * CELL_SIZE;
+    BUILDINGS.forEach((bld) => {
+      const wallMat = new THREE.MeshStandardMaterial({ color: bld.color, roughness: 0.9 });
+      const roofMat = new THREE.MeshStandardMaterial({ color: bld.roofColor, roughness: 0.85, metalness: 0.15 });
+      const trussMat = new THREE.MeshStandardMaterial({ color: bld.trussColor, roughness: 0.6, metalness: 0.4 });
+
+      const oMinX = gw(bld.gx0), oMaxX = gw(bld.gx1 + 1);
+      const oMinZ = gw(bld.gy0), oMaxZ = gw(bld.gy1 + 1);
+      const iMinX = gw(bld.inner.gx0), iMaxX = gw(bld.inner.gx1 + 1);
+      const iMinZ = gw(bld.inner.gy0), iMaxZ = gw(bld.inner.gy1 + 1);
+      const bandY0 = WALL_HEIGHT, bandY1 = bld.wallTop;
+      const bandH = bandY1 - bandY0;
+
+      const addBand = (x0, z0, x1, z1) => {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, bandH, z1 - z0), wallMat);
+        m.position.set((x0 + x1) / 2, bandY0 + bandH / 2, (z0 + z1) / 2);
+        wallGroup.add(m);
+      };
+      addBand(oMinX, oMinZ, oMaxX, iMinZ);   // 北
+      addBand(oMinX, iMaxZ, oMaxX, oMaxZ);   // 南
+      addBand(oMinX, iMinZ, iMinX, iMaxZ);   // 西
+      addBand(iMaxX, iMinZ, oMaxX, iMaxZ);   // 東
+
+      // 天井
+      const roof = new THREE.Mesh(
+        new THREE.BoxGeometry(oMaxX - oMinX, bld.roofThickness, oMaxZ - oMinZ), roofMat);
+      roof.position.set((oMinX + oMaxX) / 2, bandY1 + bld.roofThickness / 2, (oMinZ + oMaxZ) / 2);
+      wallGroup.add(roof);
+
+      // 屋内の梁(トラス)。天井のすぐ下に等間隔で渡す
+      const spanX = iMaxX - iMinX;
+      const count = Math.max(2, Math.round((iMaxZ - iMinZ) / 5));
+      for (let i = 0; i <= count; i++) {
+        const pz = iMinZ + (iMaxZ - iMinZ) * i / count;
+        const truss = new THREE.Mesh(new THREE.BoxGeometry(spanX, 0.26, 0.24), trussMat);
+        truss.position.set((iMinX + iMaxX) / 2, bandY1 - 0.2, pz);
+        wallGroup.add(truss);
+      }
+      // 縦の支柱(四隅の内側)
+      [[iMinX + 0.3, iMinZ + 0.3], [iMaxX - 0.3, iMinZ + 0.3],
+       [iMinX + 0.3, iMaxZ - 0.3], [iMaxX - 0.3, iMaxZ - 0.3]].forEach(([px, pz]) => {
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.26, bandY1, 0.26), trussMat);
+        post.position.set(px, bandY1 / 2, pz);
+        wallGroup.add(post);
+      });
+    });
+  }
+
+  // ---- 遮蔽物: 場所の雰囲気に合わせて形と色を変える ----
+  // 木箱一辺倒だと単調なので、コンテナ・コンクリブロック・ドラム缶・土嚢・石材を混ぜる。
+  // 種類は座標から決まるので、毎回同じ見た目になる。
+  const OBSTACLE_KINDS = ['crate', 'container', 'concrete', 'barrels', 'sandbags'];
+  function obstacleKindFor(o) {
+    if (o.kind) return o.kind;
+    // ビル・ベランダ(神殿)の周りは石材、庭と倉庫は資材や土嚢が似合う
+    if (o.gy <= 6 && o.gx >= 9 && o.gx <= 20) return 'stone';
+    return OBSTACLE_KINDS[(o.gx * 7 + o.gy * 13) % OBSTACLE_KINDS.length];
+  }
+
+  function buildObstacles() {
+    const mats = {
+      wood:      new THREE.MeshStandardMaterial({ color: 0x8a5f2c, roughness: 0.92 }),
+      woodTrim:  new THREE.MeshStandardMaterial({ color: 0x4a3418, roughness: 0.85 }),
+      metalA:    new THREE.MeshStandardMaterial({ color: 0x4a6b56, roughness: 0.7, metalness: 0.35 }),
+      metalB:    new THREE.MeshStandardMaterial({ color: 0x8a4a34, roughness: 0.75, metalness: 0.3 }),
+      rib:       new THREE.MeshStandardMaterial({ color: 0x2f3a34, roughness: 0.6, metalness: 0.5 }),
+      concrete:  new THREE.MeshStandardMaterial({ color: 0xb2ab99, roughness: 0.95 }),
+      concreteD: new THREE.MeshStandardMaterial({ color: 0x8a8474, roughness: 0.95 }),
+      barrel:    new THREE.MeshStandardMaterial({ color: 0x6d3a2c, roughness: 0.6, metalness: 0.35 }),
+      barrelRim: new THREE.MeshStandardMaterial({ color: 0x38312a, roughness: 0.5, metalness: 0.5 }),
+      sand:      new THREE.MeshStandardMaterial({ color: 0x9c8f68, roughness: 1.0 }),
+      stone:     new THREE.MeshStandardMaterial({ color: 0xd8d2c0, roughness: 0.85 }),
+      stoneD:    new THREE.MeshStandardMaterial({ color: 0xb6ae9a, roughness: 0.9 }),
+    };
+    const S = CELL_SIZE;
 
     OBSTACLE_CELLS.forEach((o) => {
       const w = gridToWorld(o.gx, o.gy);
-      const crate = new THREE.Mesh(crateGeo, crateMat);
-      crate.position.set(w.x, 0.65, w.z);
-      wallGroup.add(crate);
+      const g = new THREE.Group();
+      const kind = obstacleKindFor(o);
+      // 同じ種類でも少しずつ違って見えるよう、座標から決まる擬似乱数で向きを変える
+      const rnd = ((o.gx * 928371 + o.gy * 12289) % 1000) / 1000;
 
-      const trimTop = new THREE.Mesh(new THREE.BoxGeometry(CELL_SIZE * 0.86, 0.06, CELL_SIZE * 0.86), trimMat);
-      trimTop.position.set(w.x, 1.3, w.z);
-      wallGroup.add(trimTop);
+      if (kind === 'crate') {
+        const h = 1.35;
+        const body = new THREE.Mesh(new THREE.BoxGeometry(S * 0.8, h, S * 0.8), mats.wood);
+        body.position.y = h / 2; g.add(body);
+        [[0, h * 0.32], [0, h * 0.78]].forEach(([, py]) => {
+          const band = new THREE.Mesh(new THREE.BoxGeometry(S * 0.84, 0.1, S * 0.84), mats.woodTrim);
+          band.position.y = py; g.add(band);
+        });
+        const lid = new THREE.Mesh(new THREE.BoxGeometry(S * 0.86, 0.08, S * 0.86), mats.woodTrim);
+        lid.position.y = h; g.add(lid);
+      } else if (kind === 'container') {
+        const h = 1.9;
+        const body = new THREE.Mesh(new THREE.BoxGeometry(S * 0.86, h, S * 0.7),
+          rnd > 0.5 ? mats.metalA : mats.metalB);
+        body.position.y = h / 2; g.add(body);
+        for (let i = -3; i <= 3; i++) {
+          const rib = new THREE.Mesh(new THREE.BoxGeometry(0.1, h * 0.86, S * 0.74), mats.rib);
+          rib.position.set(i * S * 0.115, h / 2, 0); g.add(rib);
+        }
+        const top = new THREE.Mesh(new THREE.BoxGeometry(S * 0.9, 0.14, S * 0.74), mats.rib);
+        top.position.y = h; g.add(top);
+      } else if (kind === 'concrete') {
+        const h = 1.15;
+        const body = new THREE.Mesh(new THREE.BoxGeometry(S * 0.88, h * 0.8, S * 0.62), mats.concrete);
+        body.position.y = h * 0.4 + 0.16; g.add(body);
+        const foot = new THREE.Mesh(new THREE.BoxGeometry(S * 0.94, 0.18, S * 0.72), mats.concreteD);
+        foot.position.y = 0.09; g.add(foot);
+        const cap = new THREE.Mesh(new THREE.BoxGeometry(S * 0.8, 0.12, S * 0.54), mats.concreteD);
+        cap.position.y = h; g.add(cap);
+      } else if (kind === 'barrels') {
+        const h = 0.98;
+        [[-0.75, -0.6], [0.72, -0.5], [-0.1, 0.72], [0.9, 0.85]].forEach(([bx, bz], i) => {
+          if (i === 3 && rnd < 0.5) return;
+          const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, h, 12), mats.barrel);
+          barrel.position.set(bx, h / 2, bz); g.add(barrel);
+          [0.3, 0.68].forEach((t) => {
+            const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 0.07, 12), mats.barrelRim);
+            rim.position.set(bx, h * t, bz); g.add(rim);
+          });
+        });
+      } else if (kind === 'sandbags') {
+        const rows = 3;
+        for (let r = 0; r < rows; r++) {
+          const n = 3 - (r % 2 === 1 ? 1 : 0);
+          for (let i = 0; i < n; i++) {
+            const bag = new THREE.Mesh(new THREE.BoxGeometry(S * 0.3, 0.3, S * 0.7), mats.sand);
+            bag.position.set((i - (n - 1) / 2) * S * 0.32, 0.16 + r * 0.3,
+              (r % 2 === 1 ? 0.18 : -0.1) + ((i % 2) - 0.5) * 0.14);
+            bag.rotation.y = ((i + r) % 2 ? 1 : -1) * 0.07;
+            g.add(bag);
+          }
+        }
+      } else { // stone: 神殿・ビル周りの石材
+        const h = 1.3;
+        const body = new THREE.Mesh(new THREE.BoxGeometry(S * 0.74, h * 0.72, S * 0.74), mats.stone);
+        body.position.y = h * 0.36 + 0.2; g.add(body);
+        const plinth = new THREE.Mesh(new THREE.BoxGeometry(S * 0.9, 0.22, S * 0.9), mats.stoneD);
+        plinth.position.y = 0.11; g.add(plinth);
+        const cornice = new THREE.Mesh(new THREE.BoxGeometry(S * 0.86, 0.16, S * 0.86), mats.stoneD);
+        cornice.position.y = h; g.add(cornice);
+      }
+
+      g.position.set(w.x, 0, w.z);
+      g.rotation.y = (rnd - 0.5) * 0.3;
+      wallGroup.add(g); // 射撃の遮蔽判定にも使う
     });
   }
 
@@ -4204,8 +4477,11 @@ const PvpSystem = (() => {
       stringer:  new THREE.MeshStandardMaterial({ color: 0x6b6558, roughness: 0.7, metalness: 0.2 }),
     };
     // 下部構造(スラブ・外壁)を先に、手すりを後に作ると重なりが目立ちにくい
+    mats.stone = new THREE.MeshStandardMaterial({ color: 0xd6d0be, roughness: 0.85 });
+    mats.stoneLight = new THREE.MeshStandardMaterial({ color: 0xeae4d2, roughness: 0.8 });
     HEIGHT_ZONES.filter(z => z.type === 'flat').forEach(z => buildFlatZone(z, mats));
     HEIGHT_ZONES.filter(z => z.type === 'ramp').forEach(z => buildRampZone(z, mats));
+    HEIGHT_ZONES.filter(z => z.colonnade).forEach(z => buildColonnade(z, mats));
   }
 
   // ---- 裏ルート(ダクト)の演出: 低い天板+リブでトンネルらしさを出す ----
@@ -4548,6 +4824,17 @@ const PvpSystem = (() => {
     el.gameoverStats.textContent = `難易度: ${diffLabel}   撃破数: ${EnemyManager.getTotalCount() - EnemyManager.getAliveCount()} / ${EnemyManager.getTotalCount()}   経過時間: ${elapsed}秒`;
     showScreen(el.gameover);
   }
+
+  // ---- 文字選択・長押しメニューの抑止 ----
+  // CSSだけだと、iOSでは長押しの押し始めに一瞬選択が走ってメニューが出ることがある。
+  // 対戦コードの入力欄だけは通常どおり選択できるようにしておく。
+  const isTextField = (t) => t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT');
+  document.addEventListener('selectstart', (e) => {
+    if (!isTextField(e.target)) e.preventDefault();
+  });
+  document.addEventListener('contextmenu', (e) => {
+    if (!isTextField(e.target)) e.preventDefault();
+  });
 
   el.btnQuitMission.addEventListener('click', abortMission);
 
