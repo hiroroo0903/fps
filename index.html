@@ -402,6 +402,20 @@ html, body {
 }
 .strafe-button:active { background: rgba(219, 228, 214, 0.28); border-color: var(--accent); color: var(--accent); }
 .strafe-left { left: 50%; transform: translateX(-5.2rem); }
+
+.btn-quit-mission {
+  position: absolute; left: 1rem; bottom: 1.2rem;
+  background: rgba(10, 14, 10, 0.6);
+  border: 1px solid var(--panel-line);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 0.75rem;
+  padding: 0.4rem 0.7rem;
+  border-radius: 3px;
+  pointer-events: auto;
+}
+.btn-quit-mission:active { color: var(--danger); border-color: var(--danger); }
+.btn-quit-mission.hidden { display: none; }
 .strafe-reload { left: 50%; transform: translateX(-1.6rem); font-size: 1.3rem; }
 .strafe-right { left: 50%; transform: translateX(2rem); }
 
@@ -576,6 +590,8 @@ html, body {
 
   <div id="hit-marker" class="hit-marker"></div>
 
+  <button id="btn-quit-mission" class="btn-quit-mission hidden" aria-label="ミッションを終了">✕ 終了</button>
+
   <div class="hud-top-left">
     <div class="hp-label">HP</div>
     <div class="hp-bar-bg"><div id="hp-bar-fill" class="hp-bar-fill"></div></div>
@@ -620,7 +636,7 @@ html, body {
 
 <!-- ゲームオーバー画面 -->
 <div id="screen-gameover" class="screen hidden">
-  <h2 class="gameover-title">GAME OVER</h2>
+  <h2 id="gameover-title" class="gameover-title">GAME OVER</h2>
   <p id="gameover-stats" class="sub"></p>
   <button id="btn-restart-over" class="btn-primary">タイトルに戻る</button>
 </div>
@@ -1167,12 +1183,16 @@ const SensorSystem = (() => {
       if (lastMotionTime !== null) {
         let dt = (now - lastMotionTime) / 1000;
         dt = Math.min(dt, 0.1); // タブ切り替え等での大きな時間差を抑制
-        // rotationRateの各成分は、alpha→ローカルY軸、beta→ローカルX軸、gamma→ローカルZ軸の
-        // 回転速度に対応する(実機データを模した数値検証で確認済み)
-        const wx = THREE.MathUtils.degToRad(rot.beta || 0);
-        const wy = THREE.MathUtils.degToRad(rot.alpha || 0);
-        const wz = THREE.MathUtils.degToRad(rot.gamma || 0);
-        const omega = new THREE.Vector3(wx, wy, wz);
+        // rotationRateの各成分(規格上はbeta→ローカルX軸, gamma→ローカルY軸, alpha→ローカルZ軸)を、
+        // このモジュールが使うクォータニオンの基準(q1による90度補正込み)に合わせてq1で共役変換してから使う。
+        // (この変換をせずに素朴にX/Y/Zへ割り当てると、上下と左右の反応が入れ替わってしまうことを
+        // 実機データを模した数値検証で確認し、q1による共役変換で解消することを確認済み)
+        const rawOmega = new THREE.Vector3(
+          THREE.MathUtils.degToRad(rot.beta || 0),
+          THREE.MathUtils.degToRad(rot.gamma || 0),
+          THREE.MathUtils.degToRad(rot.alpha || 0)
+        );
+        const omega = rawOmega.applyQuaternion(q1);
         const angle = omega.length() * dt;
         if (angle > 1e-7) {
           omega.normalize();
@@ -3175,6 +3195,8 @@ const PvpSystem = (() => {
     hudTopRight: document.querySelector('.hud-top-right'),
     canvasContainer: document.getElementById('canvas-container'),
     gameoverStats: document.getElementById('gameover-stats'),
+    gameoverTitle: document.getElementById('gameover-title'),
+    btnQuitMission: document.getElementById('btn-quit-mission'),
     clearStats: document.getElementById('clear-stats'),
     // 対戦モード(2人)
     pvpConnect: document.getElementById('screen-pvp-connect'),
@@ -4171,12 +4193,27 @@ const PvpSystem = (() => {
   function gameOver() {
     gameState = 'gameover';
     AudioSystem.playGameOver();
+    el.gameoverTitle.textContent = 'GAME OVER';
     const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
     const diffLabel = DIFFICULTY_PRESETS[selectedDifficulty]?.label || selectedDifficulty;
     const matesInfo = selectedMode === 'team' ? `   生存味方: ${AllyManager.getAliveCount()}/${AllyManager.getTotalCount()}` : '';
     el.gameoverStats.textContent = `難易度: ${diffLabel}   撃破数: ${EnemyManager.getTotalCount() - EnemyManager.getAliveCount()} / ${EnemyManager.getTotalCount()}   経過時間: ${elapsed}秒${matesInfo}`;
     showScreen(el.gameover);
   }
+
+  // ソロミッションを途中で終了する
+  function abortMission() {
+    if (gameState !== 'playing') return;
+    if (!window.confirm('ミッションを終了しますか?ここまでの進行は失われます。')) return;
+    gameState = 'gameover';
+    el.gameoverTitle.textContent = 'ミッション中断';
+    const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
+    const diffLabel = DIFFICULTY_PRESETS[selectedDifficulty]?.label || selectedDifficulty;
+    el.gameoverStats.textContent = `難易度: ${diffLabel}   撃破数: ${EnemyManager.getTotalCount() - EnemyManager.getAliveCount()} / ${EnemyManager.getTotalCount()}   経過時間: ${elapsed}秒`;
+    showScreen(el.gameover);
+  }
+
+  el.btnQuitMission.addEventListener('click', abortMission);
 
   function missionClear() {
     gameState = 'clear';
@@ -4195,6 +4232,7 @@ const PvpSystem = (() => {
     el.hudTopRight.classList.remove('hidden');
     el.hudPvpScore.classList.add('hidden');
     el.pvpRespawnOverlay.classList.add('hidden');
+    el.btnQuitMission.classList.add('hidden');
     pvpRespawning = false;
     showScreen(el.title);
   }
@@ -4277,6 +4315,7 @@ const PvpSystem = (() => {
 
     startTime = performance.now();
     gameState = 'playing';
+    el.btnQuitMission.classList.toggle('hidden', selectedMode !== 'solo');
     showScreen(el.hud);
   }
 
@@ -4487,6 +4526,7 @@ const PvpSystem = (() => {
 
     startTime = performance.now();
     gameState = 'playing';
+    el.btnQuitMission.classList.add('hidden');
     showScreen(el.hud);
     updatePvpScoreHud();
   }
