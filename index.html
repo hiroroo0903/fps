@@ -583,6 +583,7 @@ html, body {
 
 <!-- HUD(ゲームプレイ中) -->
 <div id="hud" class="hidden">
+  <div id="sensor-debug" style="position:fixed;top:4px;left:4px;z-index:9999;background:rgba(0,0,0,0.55);color:#0f0;font:11px/1.4 monospace;padding:4px 6px;border-radius:4px;pointer-events:none;white-space:pre;"></div>
   <div id="crosshair" class="crosshair">
     <div class="crosshair-line h"></div>
     <div class="crosshair-line v"></div>
@@ -1122,7 +1123,7 @@ const SensorSystem = (() => {
     runPeakStreak: 0, // 連続でピークが検出された回数(単発の振動を除外するため)
     footstepCount: 0, // 確定した足踏みの回数(足音再生のトリガーに使用)
     lastFastRotationTime: 0,
-    debugRaw: { alpha: null, beta: null, gamma: null, compass: null, rotMag: null, isRunning: false }, // デバッグ表示用の生センサー値
+    debugRaw: { alpha: null, beta: null, gamma: null, compass: null, rotMag: null, isRunning: false, gyroActive: false }, // デバッグ表示用の生センサー値
     debugLastCalibrateYawDeg: null,
     debugYawOffsetDeg: 0,
     hasReceivedOrientation: false, // 実際のセンサー値を一度でも受信したか
@@ -1134,19 +1135,35 @@ const SensorSystem = (() => {
   function updateDerivedState(rawQ) {
     // 校正時の姿勢を基準にした相対姿勢(ヨー・ピッチ・ロールすべてが校正の対象)
     const rel = calibrationInverse.clone().multiply(rawQ);
-    state.quaternion.copy(rel);
 
-    // 表示・参考用にyaw・pitch・rollを抽出(YXZ順、あくまで参考値)
-    const e = new THREE.Euler().setFromQuaternion(rel, 'YXZ');
-    state.yawDeg = THREE.MathUtils.radToDeg(e.y);
-    state.pitchDeg = THREE.MathUtils.radToDeg(e.x);
-    state.rollDeg = THREE.MathUtils.radToDeg(e.z);
+    // 表示・参考用にyaw・pitch・rollを抽出(YXZ順、あくまで参考値。実際のカメラには使わない)
+    const eDebug = new THREE.Euler().setFromQuaternion(rel, 'YXZ');
+    state.yawDeg = THREE.MathUtils.radToDeg(eDebug.y);
+    state.pitchDeg = THREE.MathUtils.radToDeg(eDebug.x);
+    state.rollDeg = THREE.MathUtils.radToDeg(eDebug.z);
 
-    // 移動方向・カメラの向き: 実際の3Dベクトルを水平面に投影して求める。
-    // カメラの見た目の向きと、走る方向が必ず一致するようにするため。
+    // 移動方向・見た目の向き: 実際の3Dベクトル(見ている方向)をrelから求める。
     const fwd3 = new THREE.Vector3(0, 0, -1).applyQuaternion(rel);
     const right3 = new THREE.Vector3(1, 0, 0).applyQuaternion(rel);
 
+    // カメラの姿勢は、relをそのまま使わず「見ている方向(fwd3)」からヨー・ピッチだけで
+    // 組み直す(ロール成分を意図的に捨てる)。
+    // relをそのまま使うと、端末を垂直に近い姿勢で構えたときのalpha(方位角)の数学的な
+    // 不安定さ(ジンバルロック)や、傾けたときのコンパス値のわずかなブレが「ロール
+    // (レティクルを中心にした画面の回転)」として現れてしまう。人がスマホを傾けて
+    // 上下を見るときにロールが生じるのは不自然なので、常にロール0のカメラ(一般的な
+    // FPSゲームと同じ、ヨー・ピッチのみのカメラ)として再構築する。
+    const yaw = Math.atan2(-fwd3.x, -fwd3.z);
+    const PITCH_LIMIT = THREE.MathUtils.degToRad(89.5); // 真上/真下ちょうどでの特異点を避ける
+    const pitch = THREE.MathUtils.clamp(
+      Math.asin(THREE.MathUtils.clamp(fwd3.y, -1, 1)),
+      -PITCH_LIMIT,
+      PITCH_LIMIT
+    );
+    const cameraEuler = new THREE.Euler(pitch, yaw, 0, 'YXZ');
+    state.quaternion.setFromEuler(cameraEuler);
+
+    // 移動用ベクトルは水平面に投影して求める(カメラの見た目の向きと走る方向を一致させる)。
     fwd3.y = 0;
     if (fwd3.lengthSq() > 1e-6) fwd3.normalize(); else fwd3.set(0, 0, -1);
     right3.y = 0;
@@ -1189,6 +1206,7 @@ const SensorSystem = (() => {
     const now = performance.now();
     if (hasRot && gyroInitialized) {
       gyroActive = true;
+      state.debugRaw.gyroActive = true;
       if (lastMotionTime !== null) {
         let dt = (now - lastMotionTime) / 1000;
         dt = Math.min(dt, 0.1); // タブ切り替え等での大きな時間差を抑制
@@ -3177,6 +3195,7 @@ const PvpSystem = (() => {
     title: document.getElementById('screen-title'),
     permError: document.getElementById('screen-permission-error'),
     hud: document.getElementById('hud'),
+    sensorDebug: document.getElementById('sensor-debug'),
     gameover: document.getElementById('screen-gameover'),
     clear: document.getElementById('screen-clear'),
     btnStart: document.getElementById('btn-start'),
@@ -4636,6 +4655,18 @@ const PvpSystem = (() => {
     if (gameState === 'playing') {
       // 視点: センサーの相対姿勢をそのままカメラに適用
       camera.quaternion.copy(SensorSystem.state.quaternion);
+
+      // デバッグ表示: ジャイロが実際に使われているか、生のセンサー値を画面左上に表示
+      // (原因切り分け用。問題解決後は削除してよい)
+      if (el.sensorDebug) {
+        const d = SensorSystem.state.debugRaw;
+        const fmt = (v) => (v === null || v === undefined) ? '--' : v.toFixed(1);
+        el.sensorDebug.textContent =
+          `gyro: ${d.gyroActive ? 'ON' : 'OFF(fallback)'}\n` +
+          `alpha:${fmt(d.alpha)} beta:${fmt(d.beta)} gamma:${fmt(d.gamma)}\n` +
+          `compass:${fmt(d.compass)}\n` +
+          `yaw:${fmt(SensorSystem.state.yawDeg)} pitch:${fmt(SensorSystem.state.pitchDeg)} roll:${fmt(SensorSystem.state.rollDeg)}`;
+      }
 
       // 移動: 駆け足検出、または矢印キー/WASDで前進・後退・ストレイフ
       // forward/rightはSensorSystem側でカメラの向きと同じクォータニオンから直接計算されるため、
