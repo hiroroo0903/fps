@@ -81,6 +81,27 @@ html, body {
 }
 .screen.hidden { display: none; }
 
+/* 共通の非表示クラス。これが無いと .pvp-section の display:flex などに負けて
+   「隠したはずの手順がすべて表示される」不具合になる */
+.hidden { display: none !important; }
+
+/* 対戦の接続手順(ウィザード) */
+.pvp-back { align-self: flex-start; margin: 0 0 0.4rem 0; }
+.pvp-progress { display: flex; align-items: center; gap: 0.45rem; margin: 0.2rem 0 0.5rem 0; }
+.pvp-progress .dot {
+  width: 1.6rem; height: 1.6rem; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.75rem; background: var(--panel);
+  border: 1px solid var(--panel-line); color: var(--text-dim);
+}
+.pvp-progress .dot.on { background: var(--accent); color: #101610; border-color: var(--accent); font-weight: bold; }
+.pvp-progress .dot.done { background: var(--safe-green); color: #101610; border-color: var(--safe-green); }
+.pvp-progress .line { width: 2.4rem; height: 2px; background: var(--panel-line); }
+.pvp-progress .line.done { background: var(--safe-green); }
+.pvp-substep { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 0.35rem; }
+.pvp-headline { color: var(--text-main); font-size: 0.95rem; margin: 0.1rem 0 0.2rem 0; text-align: center; }
+.pvp-hint { color: var(--text-dim); font-size: 0.72rem; margin: 0.1rem 0 0.3rem 0; text-align: center; line-height: 1.5; }
+
 .title {
   font-size: 2.6rem;
   letter-spacing: 0.25rem;
@@ -207,7 +228,8 @@ html, body {
 
 .qr-wrap {
   background: #fff;
-  padding: 0.6rem;
+  /* QRの周囲には白い余白(クワイエットゾーン)が必要。狭いと読み取れなくなる */
+  padding: 0.85rem;
   border-radius: 4px;
   display: flex; align-items: center; justify-content: center;
   margin: 0.3rem 0;
@@ -604,6 +626,7 @@ html, body {
 <!-- 対戦モード: 接続画面 -->
 <div id="screen-pvp-connect" class="screen hidden">
   <h2 class="pvp-title">対戦(2人)</h2>
+  <button id="btn-pvp-back" class="btn-secondary pvp-back">← 戻る</button>
 
   <div id="pvp-role-select" class="pvp-section">
     <p class="sub">同じWiFiに繋がっている家族のスマホと1対1で対戦します。<br>片方が「ホスト」、もう片方が「参加」を選んでください。</p>
@@ -611,42 +634,67 @@ html, body {
       <button id="btn-pvp-host" class="btn-primary">ホストになる</button>
       <button id="btn-pvp-join" class="btn-primary">参加する</button>
     </div>
-    <button id="btn-pvp-back" class="btn-secondary">タイトルに戻る</button>
   </div>
 
+  <!-- ホスト側: 手順を1つずつ表示する -->
   <div id="pvp-host-flow" class="pvp-section hidden">
-    <p class="pvp-step">① 下のQRコードを相手に読み取ってもらってください</p>
-    <div id="pvp-host-qr" class="qr-wrap"></div>
-    <details class="pvp-fallback">
-      <summary>QRが読み取れない場合(文字コードで代用)</summary>
-      <textarea id="pvp-host-code" class="pvp-code" readonly rows="3"></textarea>
-      <button id="btn-pvp-copy-host" class="btn-secondary">コードをコピー</button>
-    </details>
+    <div class="pvp-progress">
+      <span id="pvp-host-dot1" class="dot on">1</span>
+      <span id="pvp-host-line" class="line"></span>
+      <span id="pvp-host-dot2" class="dot">2</span>
+    </div>
 
-    <p class="pvp-step">② 相手のQRコードを読み取ってください</p>
-    <button id="btn-pvp-scan-host" class="btn-primary">QRコードを読み取る</button>
-    <div id="pvp-host-scanner" class="qr-scanner hidden"></div>
-    <details class="pvp-fallback">
-      <summary>QRが読み取れない場合(文字コードで代用)</summary>
-      <textarea id="pvp-host-paste" class="pvp-code" rows="3" placeholder="ここに貼り付け"></textarea>
-      <button id="btn-pvp-connect-host" class="btn-secondary">このコードで接続する</button>
-    </details>
+    <div id="pvp-host-step1" class="pvp-substep">
+      <p class="pvp-headline">自分のQRコードを見せる</p>
+      <p class="pvp-hint">相手の端末で「参加する」を選び、このQRコードを読み取ってもらってください。</p>
+      <div id="pvp-host-qr" class="qr-wrap"></div>
+      <button id="btn-pvp-host-next" class="btn-primary">読み取ってもらった</button>
+      <details class="pvp-fallback">
+        <summary>QRが読み取れない場合(文字コードで代用)</summary>
+        <textarea id="pvp-host-code" class="pvp-code" readonly rows="3"></textarea>
+        <button id="btn-pvp-copy-host" class="btn-secondary">コードをコピー</button>
+      </details>
+    </div>
+
+    <div id="pvp-host-step2" class="pvp-substep hidden">
+      <p class="pvp-headline">相手のQRコードを読み取る</p>
+      <p class="pvp-hint">相手の画面に出ているQRコードにカメラを向けてください。</p>
+      <div id="pvp-host-scanner" class="qr-scanner hidden"></div>
+      <button id="btn-pvp-scan-host" class="btn-primary">カメラを起動する</button>
+      <details class="pvp-fallback">
+        <summary>QRが読み取れない場合(文字コードで代用)</summary>
+        <textarea id="pvp-host-paste" class="pvp-code" rows="3" placeholder="ここに貼り付け"></textarea>
+        <button id="btn-pvp-connect-host" class="btn-secondary">このコードで接続する</button>
+      </details>
+      <button id="btn-pvp-host-prev" class="btn-secondary">自分のQRコードに戻る</button>
+    </div>
 
     <p id="pvp-host-status" class="pvp-status"></p>
   </div>
 
+  <!-- 参加側: 手順を1つずつ表示する -->
   <div id="pvp-guest-flow" class="pvp-section hidden">
-    <p class="pvp-step">① ホストのQRコードを読み取ってください</p>
-    <button id="btn-pvp-scan-guest" class="btn-primary">QRコードを読み取る</button>
-    <div id="pvp-guest-scanner" class="qr-scanner hidden"></div>
-    <details class="pvp-fallback">
-      <summary>QRが読み取れない場合(文字コードで代用)</summary>
-      <textarea id="pvp-guest-paste" class="pvp-code" rows="3" placeholder="ここに貼り付け"></textarea>
-      <button id="btn-pvp-make-answer" class="btn-secondary">このコードで返信コードを作成</button>
-    </details>
+    <div class="pvp-progress">
+      <span id="pvp-guest-dot1" class="dot on">1</span>
+      <span id="pvp-guest-line" class="line"></span>
+      <span id="pvp-guest-dot2" class="dot">2</span>
+    </div>
 
-    <div id="pvp-guest-step2" class="hidden">
-      <p class="pvp-step">② 下のQRコードをホストに読み取ってもらってください</p>
+    <div id="pvp-guest-step1" class="pvp-substep">
+      <p class="pvp-headline">ホストのQRコードを読み取る</p>
+      <p class="pvp-hint">相手の端末で「ホストになる」を選んでもらい、出てきたQRコードにカメラを向けてください。</p>
+      <div id="pvp-guest-scanner" class="qr-scanner hidden"></div>
+      <button id="btn-pvp-scan-guest" class="btn-primary">カメラを起動する</button>
+      <details class="pvp-fallback">
+        <summary>QRが読み取れない場合(文字コードで代用)</summary>
+        <textarea id="pvp-guest-paste" class="pvp-code" rows="3" placeholder="ここに貼り付け"></textarea>
+        <button id="btn-pvp-make-answer" class="btn-secondary">このコードで返信コードを作成</button>
+      </details>
+    </div>
+
+    <div id="pvp-guest-step2" class="pvp-substep hidden">
+      <p class="pvp-headline">自分のQRコードを見せる</p>
+      <p class="pvp-hint">ホストに読み取ってもらうと、そのまま試合が始まります。</p>
       <div id="pvp-guest-qr" class="qr-wrap"></div>
       <details class="pvp-fallback">
         <summary>QRが読み取れない場合(文字コードで代用)</summary>
@@ -3196,33 +3244,81 @@ const NetSystem = (() => {
     });
   }
 
-  // SDPから接続コードを短縮するための絞り込み。
-  // 同一ネットワークでの接続には IPv4 の host候補があれば十分なので、
-  // IPv6候補・重複しがちな候補を削り、接続コードを大幅に短くする。
-  // (万一フィルタで候補が0件になってしまった場合は、安全のため元のSDPをそのまま使う)
-  function slimSdp(sdp) {
-    const lines = sdp.split('\r\n');
-    const kept = lines.filter((line) => {
-      if (!line.startsWith('a=candidate:')) return true; // candidate行以外はそのまま残す
-      const parts = line.split(' ');
-      const ip = parts[4] || '';
-      const isIPv4 = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip);
-      return isIPv4; // IPv4のhost候補だけ残す(STUNを使っていないのでsrflx/relayは元々発生しない)
-    });
-    const candidateCount = kept.filter((l) => l.startsWith('a=candidate:')).length;
-    if (candidateCount === 0) return sdp; // 念のための安全策: 絞り込みすぎた場合は元のSDPを使う
-    return kept.join('\r\n');
+  // ---- 接続コードの圧縮 ----
+  // SDPをそのまま圧縮すると約960文字になり、QRコードはバージョン22(105×105モジュール)まで
+  // 大きくなってしまう。220px四方で表示すると1モジュールが2.1pxしかなく、カメラで読めない。
+  // データチャネルだけの接続に必要な項目は ufrag / pwd / 証明書のフィンガープリント /
+  // setup / mid / 候補(IP・ポート・優先度) だけなので、それらを抜き出して持ち運び、
+  // 受け取った側で標準的なSDPを組み立て直す。約270文字(バージョン10・57×57)まで縮む。
+  function packDescription(desc) {
+    const sdp = desc.sdp || '';
+    const pick = (re) => { const m = sdp.match(re); return m ? m[1] : ''; };
+    const ufrag = pick(/a=ice-ufrag:(\S+)/);
+    const pwd = pick(/a=ice-pwd:(\S+)/);
+    const fp = pick(/a=fingerprint:sha-256 (\S+)/);
+    const setup = pick(/a=setup:(\S+)/);
+    const mid = pick(/a=mid:(\S+)/) || '0';
+    const cands = [];
+    const re = /a=candidate:\S+ (\d+) (\S+) (\d+) (\S+) (\d+) typ host/g;
+    let m;
+    while ((m = re.exec(sdp)) !== null) {
+      const proto = m[2].toLowerCase(), ip = m[4];
+      if (proto !== 'udp') continue;                       // TCP候補は同一LANでは不要
+      if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) continue;   // IPv6は使わない
+      if (ip.startsWith('169.254.')) continue;             // リンクローカルは繋がらない
+      cands.push([ip, Number(m[5]), Number(m[3])]);        // IP, ポート, 優先度
+    }
+    // 必要な情報が揃わない場合や、想定と違う形式のSDPだった場合は、
+    // 組み立て直しに失敗する恐れがあるので、安全のためSDPをそのまま送る
+    // (この場合コードは長くなるが、下の文字コードをコピーして貼り付ければ接続できる)
+    const modern = sdp.includes('UDP/DTLS/SCTP webrtc-datachannel');
+    if (!ufrag || !pwd || !fp || !setup || cands.length === 0 || !modern) {
+      return { v: 1, type: desc.type, sdp };
+    }
+    return {
+      v: 2, t: desc.type === 'offer' ? 'o' : 'a',
+      u: ufrag, p: pwd, f: fp.replace(/:/g, ''), s: setup, m: mid, c: cands,
+    };
   }
 
-  // lz-stringで圧縮してからBase64相当の文字列にする(圧縮前よりコードが短くなる)
-  function encodeCode(obj) {
-    return LZString.compressToEncodedURIComponent(JSON.stringify(obj));
+  function unpackDescription(obj) {
+    if (!obj) throw new Error('コードの読み取りに失敗しました');
+    if (obj.v !== 2) return { type: obj.type, sdp: obj.sdp }; // 旧形式・フォールバック
+    const fp = (obj.f.match(/.{2}/g) || []).join(':').toUpperCase();
+    const lines = [
+      'v=0',
+      'o=- 1 1 IN IP4 127.0.0.1',
+      's=-',
+      't=0 0',
+      'a=group:BUNDLE ' + obj.m,
+      'a=msid-semantic: WMS',
+      'm=application 9 UDP/DTLS/SCTP webrtc-datachannel',
+      'c=IN IP4 0.0.0.0',
+      'a=ice-ufrag:' + obj.u,
+      'a=ice-pwd:' + obj.p,
+      'a=ice-options:trickle',
+      'a=fingerprint:sha-256 ' + fp,
+      'a=setup:' + obj.s,
+      'a=mid:' + obj.m,
+      'a=sctp-port:5000',
+      'a=max-message-size:262144',
+    ];
+    obj.c.forEach((c, i) => {
+      lines.push(`a=candidate:${i + 1} 1 udp ${c[2]} ${c[0]} ${c[1]} typ host generation 0`);
+    });
+    lines.push('a=end-of-candidates');
+    return { type: obj.t === 'o' ? 'offer' : 'answer', sdp: lines.join('\r\n') + '\r\n' };
+  }
+
+  // lz-stringで圧縮してからBase64相当の文字列にする
+  function encodeCode(desc) {
+    return LZString.compressToEncodedURIComponent(JSON.stringify(packDescription(desc)));
   }
 
   function decodeCode(code) {
     const json = LZString.decompressFromEncodedURIComponent(code.trim());
     if (!json) throw new Error('コードの読み取りに失敗しました');
-    return JSON.parse(json);
+    return unpackDescription(JSON.parse(json));
   }
 
   function setupDataChannel(channel) {
@@ -3244,7 +3340,7 @@ const NetSystem = (() => {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     await waitIceComplete(pc);
-    return encodeCode({ type: pc.localDescription.type, sdp: slimSdp(pc.localDescription.sdp) });
+    return encodeCode(pc.localDescription);
   }
 
   // ホスト側: ゲストから届いた返信コード(アンサー)を受け取って接続を完了する
@@ -3262,7 +3358,7 @@ const NetSystem = (() => {
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     await waitIceComplete(pc);
-    return encodeCode({ type: pc.localDescription.type, sdp: slimSdp(pc.localDescription.sdp) });
+    return encodeCode(pc.localDescription);
   }
 
   function send(msg) {
@@ -3611,6 +3707,17 @@ const PvpSystem = (() => {
     pvpGuestPaste: document.getElementById('pvp-guest-paste'),
     btnPvpMakeAnswer: document.getElementById('btn-pvp-make-answer'),
     pvpGuestStep2: document.getElementById('pvp-guest-step2'),
+    pvpHostStep1: document.getElementById('pvp-host-step1'),
+    pvpHostStep2: document.getElementById('pvp-host-step2'),
+    pvpGuestStep1: document.getElementById('pvp-guest-step1'),
+    pvpHostDot1: document.getElementById('pvp-host-dot1'),
+    pvpHostDot2: document.getElementById('pvp-host-dot2'),
+    pvpHostLine: document.getElementById('pvp-host-line'),
+    pvpGuestDot1: document.getElementById('pvp-guest-dot1'),
+    pvpGuestDot2: document.getElementById('pvp-guest-dot2'),
+    pvpGuestLine: document.getElementById('pvp-guest-line'),
+    btnPvpHostNext: document.getElementById('btn-pvp-host-next'),
+    btnPvpHostPrev: document.getElementById('btn-pvp-host-prev'),
     pvpGuestQr: document.getElementById('pvp-guest-qr'),
     pvpGuestCode: document.getElementById('pvp-guest-code'),
     btnPvpCopyGuest: document.getElementById('btn-pvp-copy-guest'),
@@ -5549,6 +5656,16 @@ const PvpSystem = (() => {
   }
 
   // 指定したcontainer要素にカメラでのQRスキャナーを起動する。読み取れたらonResultへ渡す
+  // QRコードを画面幅いっぱいに近いサイズで描く。
+  // 小さく描くと1モジュールあたりの画素が足りず、カメラで読み取れなくなる。
+  function renderQr(containerEl, text) {
+    containerEl.innerHTML = '';
+    const size = Math.round(Math.min(340, Math.max(240, window.innerWidth - 72)));
+    new QRCode(containerEl, {
+      text, width: size, height: size, correctLevel: QRCode.CorrectLevel.L,
+    });
+  }
+
   async function startScanner(containerEl, onResult, statusEl) {
     await stopScanner();
     containerEl.classList.remove('hidden');
@@ -5556,7 +5673,12 @@ const PvpSystem = (() => {
       activeScanner = new Html5Qrcode(containerEl.id);
       await activeScanner.start(
         { facingMode: 'environment' },
-        { fps: 10, qrbox: 230 },
+        {
+          fps: 12,
+          // 読み取り枠はビューファインダーに合わせる(固定サイズだと端が切れて読めない)
+          qrbox: (vw, vh) => { const m = Math.floor(Math.min(vw, vh) * 0.85); return { width: m, height: m }; },
+          aspectRatio: 1,
+        },
         async (decodedText) => {
           await stopScanner();
           onResult(decodedText);
@@ -5567,6 +5689,26 @@ const PvpSystem = (() => {
       statusEl.textContent = 'カメラを起動できませんでした。カメラへのアクセスを許可するか、下の文字コードを使ってください。';
       containerEl.classList.add('hidden');
       activeScanner = null;
+    }
+  }
+
+  // 接続手順は「1画面に1手順」だけを出す。
+  // 全部を同時に出すとQRを見せる場所と読み取る場所が入り混じって分かりにくいため。
+  function showPvpStep(role, step) {
+    if (role === 'host') {
+      el.pvpHostStep1.classList.toggle('hidden', step !== 1);
+      el.pvpHostStep2.classList.toggle('hidden', step !== 2);
+      el.pvpHostDot1.className = 'dot ' + (step === 1 ? 'on' : 'done');
+      el.pvpHostDot2.className = 'dot ' + (step === 2 ? 'on' : '');
+      el.pvpHostLine.className = 'line ' + (step === 2 ? 'done' : '');
+      if (step !== 2) stopScanner();
+    } else {
+      el.pvpGuestStep1.classList.toggle('hidden', step !== 1);
+      el.pvpGuestStep2.classList.toggle('hidden', step !== 2);
+      el.pvpGuestDot1.className = 'dot ' + (step === 1 ? 'on' : 'done');
+      el.pvpGuestDot2.className = 'dot ' + (step === 2 ? 'on' : '');
+      el.pvpGuestLine.className = 'line ' + (step === 2 ? 'done' : '');
+      if (step !== 1) stopScanner();
     }
   }
 
@@ -5583,11 +5725,16 @@ const PvpSystem = (() => {
     el.pvpGuestQr.innerHTML = '';
     el.pvpGuestPaste.value = '';
     el.pvpGuestCode.value = '';
-    el.pvpGuestStep2.classList.add('hidden');
     el.pvpGuestStatus.textContent = '';
+    showPvpStep('host', 1);
+    showPvpStep('guest', 1);
   }
 
   el.btnPvpBack.addEventListener('click', () => {
+    // 手順の途中なら役割選択へ、役割選択ならタイトルへ戻る
+    const inFlow = !el.pvpHostFlow.classList.contains('hidden')
+      || !el.pvpGuestFlow.classList.contains('hidden');
+    if (inFlow) { resetPvpConnectUI(); return; }
     NetSystem.disconnect();
     backToTitle();
   });
@@ -5600,8 +5747,9 @@ const PvpSystem = (() => {
       const code = await NetSystem.createHostOffer();
       el.pvpHostCode.value = code;
       el.pvpHostQr.innerHTML = '';
-      new QRCode(el.pvpHostQr, { text: code, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.L });
-      el.pvpHostStatus.textContent = '① のQRコードを相手に読み取ってもらい、② で相手のQRコードを読み取ってください';
+      renderQr(el.pvpHostQr, code);
+      showPvpStep('host', 1);
+      el.pvpHostStatus.textContent = '';
       NetSystem.onOpen(() => startPvpMatch(true));
     } catch (e) {
       el.pvpHostStatus.textContent = '接続コードの作成に失敗しました。ページを再読み込みして試してください。';
@@ -5610,13 +5758,23 @@ const PvpSystem = (() => {
 
   el.btnPvpCopyHost.addEventListener('click', () => copyToClipboard(el.pvpHostCode));
 
+  // ホスト: ①(QR表示) ⇄ ②(読み取り) の行き来。②に進んだらカメラを自動で開く
+  el.btnPvpHostNext.addEventListener('click', () => {
+    showPvpStep('host', 2);
+    startScanner(el.pvpHostScanner, (text) => {
+      el.pvpHostPaste.value = text;
+      connectHostWithAnswer(text);
+    }, el.pvpHostStatus);
+  });
+  el.btnPvpHostPrev.addEventListener('click', () => showPvpStep('host', 1));
+
   async function connectHostWithAnswer(code) {
     if (!code) return;
     el.pvpHostStatus.textContent = '接続しています…';
     try {
       await NetSystem.acceptAnswer(code);
     } catch (e) {
-      el.pvpHostStatus.textContent = 'コードが正しくないようです。もう一度試してください。';
+      el.pvpHostStatus.textContent = 'コードが正しくないようです。QRが読めないときは、下の文字コードをコピーして相手に送ってください。';
     }
   }
 
@@ -5631,6 +5789,11 @@ const PvpSystem = (() => {
   el.btnPvpJoin.addEventListener('click', () => {
     el.pvpRoleSelect.classList.add('hidden');
     el.pvpGuestFlow.classList.remove('hidden');
+    showPvpStep('guest', 1);
+    startScanner(el.pvpGuestScanner, (text) => {
+      el.pvpGuestPaste.value = text;
+      makeGuestAnswer(text);
+    }, el.pvpGuestStatus);
   });
 
   async function makeGuestAnswer(hostCode) {
@@ -5640,12 +5803,12 @@ const PvpSystem = (() => {
       const code = await NetSystem.createGuestAnswer(hostCode);
       el.pvpGuestCode.value = code;
       el.pvpGuestQr.innerHTML = '';
-      new QRCode(el.pvpGuestQr, { text: code, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.L });
-      el.pvpGuestStep2.classList.remove('hidden');
-      el.pvpGuestStatus.textContent = '② のQRコードをホストに読み取ってもらい、接続を待っています…';
+      renderQr(el.pvpGuestQr, code);
+      showPvpStep('guest', 2);
+      el.pvpGuestStatus.textContent = 'ホストの読み取りを待っています…';
       NetSystem.onOpen(() => startPvpMatch(false));
     } catch (e) {
-      el.pvpGuestStatus.textContent = 'コードが正しくないようです。もう一度試してください。';
+      el.pvpGuestStatus.textContent = 'コードが正しくないようです。QRが読めないときは、下の文字コードを貼り付けてください。';
     }
   }
 
