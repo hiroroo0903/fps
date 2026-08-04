@@ -1087,44 +1087,44 @@ function findPath(start, goal) {
 
 /* ==================== js/sensor.js ==================== */
 // ============================================================
-// sensor.js  (再設計版)
+// sensor.js
 // iPhoneのDeviceOrientation / DeviceMotionを扱うモジュール。
 //
 // ---- 設計方針 ----
-// [A] 姿勢(視点)
-//   1. ジャイロ(rotationRate)を積算して滑らかな姿勢を得る。
-//   2. それだけでは誤差が溜まり、ゲーム内の「上」が現実の重力方向からずれていく。
-//      → 右を向き続けただけなのに視点が空を向いてしまう、という症状の原因。
-//      そこで毎フレーム、重力方向を使って傾きを少しずつ補正する(相補フィルタ)。
-//   3. 重力方向は deviceorientation の beta/gamma から求める。
-//      alpha(方位)は端末を立てると不安定になるが、重力方向は beta/gamma だけで
-//      一意に決まり破綻しないので、傾きの基準として安全に使える。
-//   4. 視点角はクォータニオン→オイラー角の変換を使わず、前方ベクトルから
-//      yaw/pitch を直接求める。真上・真下付近では yaw を凍結して暴れを防ぐ。
+// 視点を「上下(ピッチ)」と「左右(ヨー)」に分け、それぞれ別の情報源から求める。
+// 姿勢クォータニオンの積算はしない。以前は積算した姿勢を重力で補正していたが、
+// ジャイロと重力が食い違うと両者が引っ張り合い、
+//   ・大きく振り向くと画面が上に飛ぶ
+//   ・補正を弱めると今度は上下に動かなくなる
+// という不安定さが避けられなかったため。
 //
-// [B] 足踏み(前進)検出
-//   1. 加速度を「重力方向(端末座標系での上方向)」に投影し、上下動だけを取り出す。
-//      こうすると端末を傾けても投影値はほぼ変わらないため、
-//      向きを変える動作を足踏みと誤検出しなくなる。
-//      → 以前は誤検出対策として回転中の検出を止めていたが、
-//        足踏み中は常に端末が揺れて回転判定になり、結果として一切前進できなかった。
-//        投影方式にしたことでこの抑制自体が不要になった。
-//   2. 遅い移動平均を引いてバンドパスし、ヒステリシス付きピーク検出で歩数を数える。
+// [A] 上下(ピッチ): 重力方向から直接求める
+//   端末の傾きは deviceorientation の beta/gamma から一意に決まる。
+//   これは実測値なので誤差が蓄積せず、補正も不要。カメラは端末の傾きと常に一致する。
+//   (iOSのbeta/gammaはCoreMotionの融合結果なので、手ブレや直線加速度の影響も受けにくい)
+//
+// [B] 左右(ヨー): 重力軸まわりの角速度を積分する
+//   方位は重力からは分からないためジャイロを使う。ただし角速度をそのまま使うのではなく、
+//   「重力方向の成分」だけを取り出して積分する。こうすると端末をどう傾けて構えていても
+//   「水平に振り向いた量」だけが正確に得られる。
+//   alpha(方位角)は端末を立てると不安定になるため使わない(ジャイロが無い端末のみ代用)。
+//
+// [C] 足踏み(前進)検出
+//   加速度を重力方向に投影して上下動だけを取り出し、
+//   遅い移動平均を引いたうえでヒステリシス付きピーク検出で歩数を数える。
+//   端末を傾けても投影値の意味が変わらないので、視点操作を足踏みと誤検出しない。
 // ============================================================
 
 const SensorSystem = (() => {
-  // ---- 姿勢の定数 ----
-  const TILT_CORRECT_GAIN = 0.06;   // 1イベントあたりの重力補正の強さ(0〜1)
-  const TILT_MAX_RATE_DEG = 6;      // 重力補正の最大速度 (度/秒)。
-                                    // これで補正が一気に効くことを防ぎ、画面が飛ばないようにする
-  const TILT_CALM_RATE = 60;        // これ以下の回転速度なら重力を全面的に信用する (度/秒)
-  const TILT_FAST_RATE = 300;       // これ以上の回転速度では重力補正を止める (度/秒)
-                                    // (腕を振って旋回すると遠心力で重力の推定が狂うため)
-  const MAX_PITCH_DEG = 85;         // 視点の上下限界
-  const YAW_FREEZE_DOT = 0.995;     // 前方ベクトルがほぼ真上/真下のとき yaw を凍結
-
+  // ---- 視点の定数 ----
   // 左右の視点感度。1.0で端末の回転角と同じ。大きいほど少ない動きで大きく振り向ける。
   const YAW_SENSITIVITY = 1.35;
+  // 上下の視点感度。1.0だとカメラの上下が端末の傾きと完全に一致する。
+  const PITCH_SENSITIVITY = 1.0;
+  const PITCH_SMOOTH = 0.55;        // ピッチの平滑化(0〜1)。1で平滑化なし
+  const MAX_PITCH_DEG = 85;         // 視点の上下限界
+  const CAL_PITCH_MIN_DEG = -55;    // 校正で吸収する構えの傾きの範囲。
+  const CAL_PITCH_MAX_DEG = 25;     // 極端な姿勢で校正しても操作不能にならないようにする
 
   // ---- 足踏み検出の定数(実機で調整しやすいよう1か所にまとめる) ----
   const STEP_PEAK_TH = 1.6;         // 上下動のピーク閾値 (m/s^2)。小さいほど検出しやすい
@@ -1137,77 +1137,29 @@ const SensorSystem = (() => {
   const ACC_SLOW_ALPHA = 0.02;      // 遅い移動平均(重力・バイアス除去)
   const ACC_FAST_ALPHA = 0.45;      // 速い平滑化(センサーノイズ除去)
 
-  // ---- 内部の姿勢状態 ----
-  const attitude = new THREE.Quaternion();      // カメラ座標系→ワールド座標系(絶対姿勢)
-  let attitudeReady = false;
+  // ---- 内部の視点状態 ----
+  const euler = new THREE.Euler();
+  const vUpDevice = new THREE.Vector3(0, 0, 1); // 端末座標系での「上」(重力の逆向き)
+  const vOmega = new THREE.Vector3();           // 端末座標系での角速度 (rad/s)
+  const vFwdH = new THREE.Vector3();            // 端末座標系での水平前方ベクトル
+  let hasGravity = false;
+  let gyroActive = false;
   let lastMotionTime = null;
 
-  const zee = new THREE.Vector3(0, 0, 1);
-  const worldUp = new THREE.Vector3(0, 1, 0);
-  const euler = new THREE.Euler();
-  const q0 = new THREE.Quaternion();
-  const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)); // -PI/2 around X
-  const qScreen = new THREE.Quaternion();
-  const qCorr = new THREE.Quaternion();
-  const qDelta = new THREE.Quaternion();
-  const qIdentity = new THREE.Quaternion();
-  const vOmega = new THREE.Vector3();
-  const vUpDevice = new THREE.Vector3(0, 0, 1);  // 端末座標系での「上」(重力の逆向き)
-  const vUpCam = new THREE.Vector3(0, 1, 0);     // カメラ座標系での「上」(実測)
-  const vUpPred = new THREE.Vector3(0, 1, 0);    // カメラ座標系での「上」(積算による予測)
-  const vForward = new THREE.Vector3(0, 0, -1);
-  let hasGravity = false;
+  let pitchRawFiltered = null;  // 端末の傾きから求めた生ピッチ(平滑化済み)
+  let yawAccum = 0;             // 累積ヨー。±180度で折り返さないので感度を掛けても飛ばない
+  let alphaPrev = null;         // ジャイロが無い端末向けフォールバック用
 
-  // 校正オフセット(重力基準のヨー・ピッチ)
+  // 校正オフセット
   let calYaw = 0;
   let calPitch = 0;
-  // ヨーは ±180度で折り返さない「累積値」として持つ。
-  // 感度を掛けたときに、真後ろを向いた瞬間に値が飛ぶのを防ぐため。
-  let yawAccum = 0;
-  let yawRawPrev = null;
-  let lastRotMagDeg = 0;   // 直近の回転速度(重力補正の信頼度に使う)
-  let lastOrientTime = null;
-
-  function screenOrientationAngle() {
-    if (screen.orientation && typeof screen.orientation.angle === 'number') {
-      return screen.orientation.angle;
-    }
-    return window.orientation || 0;
-  }
-
-  // 端末座標系のベクトルをカメラ座標系に変換する。
-  // attitude = Q_dev * q1 * q0 という定義から、両者の差は画面の向き(q0)だけになる。
-  function deviceToCamera(v) {
-    return v.applyQuaternion(
-      qScreen.setFromAxisAngle(zee, THREE.MathUtils.degToRad(screenOrientationAngle()))
-    );
-  }
-
-  // deviceorientation の値から絶対姿勢クォータニオンを作る(初期化・フォールバック用)
-  function computeDeviceQuaternion(event) {
-    const orient = THREE.MathUtils.degToRad(screenOrientationAngle());
-    let alphaDeg = event.alpha;
-    if (typeof event.webkitCompassHeading === 'number' && !Number.isNaN(event.webkitCompassHeading)) {
-      alphaDeg = 360 - event.webkitCompassHeading;
-    }
-    euler.set(
-      THREE.MathUtils.degToRad(event.beta),
-      THREE.MathUtils.degToRad(alphaDeg),
-      -THREE.MathUtils.degToRad(event.gamma),
-      'YXZ'
-    );
-    const q = new THREE.Quaternion().setFromEuler(euler);
-    q.multiply(q1);
-    q.multiply(q0.setFromAxisAngle(zee, -orient));
-    return q;
-  }
 
   // ---- 内部状態 ----
   const state = {
     supported: 'DeviceOrientationEvent' in window && 'DeviceMotionEvent' in window,
     permissionGranted: false,
     calibrated: false,
-    quaternion: new THREE.Quaternion(), // 視点姿勢(ロールを除去済み)
+    quaternion: new THREE.Quaternion(), // 視点姿勢(ロールは常に0)
     yawDeg: 0,
     pitchDeg: 0,
     rollDeg: 0,
@@ -1220,13 +1172,13 @@ const SensorSystem = (() => {
     hasReceivedMotion: false,
     // デバッグ表示用
     debug: {
-      stepSignal: 0,     // バンドパス後の上下動 (m/s^2)
-      stepPeak: 0,       // 直近のピーク値
-      stepsPerMin: 0,    // 推定ケイデンス
-      tiltErrorDeg: 0,   // 重力補正で修正している角度
+      stepSignal: 0,      // バンドパス後の上下動 (m/s^2)
+      stepPeak: 0,        // 直近のピーク値
+      stepsPerMin: 0,     // 推定ケイデンス
+      turnRateDeg: 0,     // 水平方向の旋回速度 (度/秒)
+      devicePitchDeg: 0,  // 端末そのものの傾き (度)
       usingLinearAcc: false,
       gyroActive: false,
-      tiltTrust: 1,
     },
   };
 
@@ -1236,40 +1188,27 @@ const SensorSystem = (() => {
   let curPeak = 0;
   let lastStepTime = 0;
   let stepStreak = 0;
-  let lastStepGap = 0;
 
   // ============================================================
-  // 視点の導出: 絶対姿勢 → yaw/pitch(ロールは捨てる)
+  // 視点の反映
   // ============================================================
   function updateView() {
-    vForward.set(0, 0, -1).applyQuaternion(attitude);
-
-    const pitchRaw = Math.asin(THREE.MathUtils.clamp(vForward.y, -1, 1));
-    // 真上・真下付近では方位が定義できない(ジンバルロック)。直前の値を保持して暴れを防ぐ。
-    if (Math.abs(vForward.y) < YAW_FREEZE_DOT) {
-      const yawRaw = Math.atan2(-vForward.x, -vForward.z);
-      if (yawRawPrev === null) {
-        yawRawPrev = yawRaw;
-      } else {
-        // 差分だけを取り出して累積する(-180/+180 の折り返しをまたいでも連続になる)
-        let d = yawRaw - yawRawPrev;
-        while (d > Math.PI) d -= Math.PI * 2;
-        while (d < -Math.PI) d += Math.PI * 2;
-        yawAccum += d;
-        yawRawPrev = yawRaw;
-      }
-    }
+    if (pitchRawFiltered === null) return;
 
     let yaw = (yawAccum - calYaw) * YAW_SENSITIVITY;
     while (yaw > Math.PI) yaw -= Math.PI * 2;
     while (yaw < -Math.PI) yaw += Math.PI * 2;
 
     const maxPitch = THREE.MathUtils.degToRad(MAX_PITCH_DEG);
-    const pitch = THREE.MathUtils.clamp(pitchRaw - calPitch, -maxPitch, maxPitch);
+    const pitch = THREE.MathUtils.clamp(
+      (pitchRawFiltered - calPitch) * PITCH_SENSITIVITY, -maxPitch, maxPitch
+    );
 
     state.yawDeg = THREE.MathUtils.radToDeg(yaw);
     state.pitchDeg = THREE.MathUtils.radToDeg(pitch);
+    state.debug.devicePitchDeg = THREE.MathUtils.radToDeg(pitchRawFiltered);
 
+    // ロールは常に0にする(手首のひねりで地平線が傾かない)
     euler.set(pitch, yaw, 0, 'YXZ');
     state.quaternion.setFromEuler(euler);
 
@@ -1279,7 +1218,7 @@ const SensorSystem = (() => {
   }
 
   // ============================================================
-  // deviceorientation: 重力方向の取得と、姿勢の初期化
+  // deviceorientation: 重力方向 → 上下(ピッチ)
   // ============================================================
   function handleOrientation(event) {
     if (event.beta === null || event.gamma === null) return;
@@ -1288,7 +1227,8 @@ const SensorSystem = (() => {
     const beta = THREE.MathUtils.degToRad(event.beta);
     const gamma = THREE.MathUtils.degToRad(event.gamma);
 
-    // 端末座標系での「上」(重力の逆向き)。beta/gammaだけで一意に決まり、alphaに依存しない。
+    // 端末座標系での「上」。W3C仕様の回転順(Z-X'-Y'')から導出でき、
+    // beta/gammaだけで一意に決まる(alphaに依存しないので端末を立てても破綻しない)。
     vUpDevice.set(
       -Math.cos(beta) * Math.sin(gamma),
       Math.sin(beta),
@@ -1296,85 +1236,74 @@ const SensorSystem = (() => {
     ).normalize();
     hasGravity = true;
 
-    // カメラ座標系に変換した実測の上方向
-    vUpCam.copy(vUpDevice);
-    deviceToCamera(vUpCam);
+    // カメラは端末の背面方向(端末座標の -Z)を向いている。
+    // その方向の仰角がそのまま視点のピッチになる。
+    //   端末を机に伏せて置く  -> -1 -> -90度(真下)
+    //   端末を垂直に立てる    ->  0 ->   0度(水平)
+    //   端末を後ろに倒す      -> +  -> 上向き
+    const pitchRaw = Math.asin(THREE.MathUtils.clamp(-vUpDevice.z, -1, 1));
+    if (pitchRawFiltered === null) {
+      pitchRawFiltered = pitchRaw;
+    } else {
+      pitchRawFiltered += PITCH_SMOOTH * (pitchRaw - pitchRawFiltered);
+    }
 
-    if (!attitudeReady || !state.calibrated) {
-      // 校正が済むまでは絶対姿勢をそのまま使う(積算の出発点を最新に保つ)
-      const hasAlpha = event.alpha !== null ||
-        (typeof event.webkitCompassHeading === 'number' && !Number.isNaN(event.webkitCompassHeading));
-      if (hasAlpha) {
-        attitude.copy(computeDeviceQuaternion(event));
-        attitudeReady = true;
-        updateView();
+    // ジャイロが使えない端末向けのフォールバック: alpha(方位角)からヨーを得る
+    if (!gyroActive) {
+      let alphaDeg = event.alpha;
+      if (typeof event.webkitCompassHeading === 'number' && !Number.isNaN(event.webkitCompassHeading)) {
+        alphaDeg = 360 - event.webkitCompassHeading;
       }
-      return;
+      if (alphaDeg !== null && !Number.isNaN(alphaDeg)) {
+        const a = THREE.MathUtils.degToRad(alphaDeg);
+        if (alphaPrev !== null) {
+          let d = a - alphaPrev;
+          while (d > Math.PI) d -= Math.PI * 2;
+          while (d < -Math.PI) d += Math.PI * 2;
+          yawAccum += d;
+        }
+        alphaPrev = a;
+      }
     }
 
-    // ---- 相補フィルタ: 積算で溜まった傾きの誤差を重力で補正する ----
-    // attitude はカメラ→ワールド。実測の上方向がワールドの上を向くように少しだけ回す。
-    //
-    // 【重要】ここで一気に補正すると、画面が上下にカクッと飛ぶ。とくに
-    //  ・腕を振って大きく旋回すると遠心力が加わり、重力の推定値が一時的に狂う
-    //  ・deviceorientation と devicemotion は時刻がそろっておらず、旋回中はズレが大きく出る
-    // ため、旋回が速いときほど補正を弱め、さらに補正速度そのものに上限を設ける。
-    const now = performance.now();
-    const dt = lastOrientTime === null ? 1 / 60 : Math.min((now - lastOrientTime) / 1000, 0.1);
-    lastOrientTime = now;
-
-    vUpPred.copy(worldUp).applyQuaternion(attitude.clone().invert());
-    const dot = THREE.MathUtils.clamp(vUpCam.dot(vUpPred), -1, 1);
-    const errRad = Math.acos(dot);
-    state.debug.tiltErrorDeg = THREE.MathUtils.radToDeg(errRad);
-
-    // 回転が速いほど重力を信用しない(0〜1)
-    const trust = THREE.MathUtils.clamp(
-      (TILT_FAST_RATE - lastRotMagDeg) / (TILT_FAST_RATE - TILT_CALM_RATE), 0, 1
-    );
-    state.debug.tiltTrust = trust;
-
-    if (errRad > 1e-4 && trust > 0) {
-      // 今回の補正量 = 誤差×ゲイン。ただし「度/秒」の上限でクリップする
-      const maxStep = THREE.MathUtils.degToRad(TILT_MAX_RATE_DEG) * dt;
-      const stepRad = Math.min(errRad * TILT_CORRECT_GAIN * trust, maxStep);
-      qCorr.setFromUnitVectors(vUpCam, vUpPred);
-      qCorr.slerp(qIdentity, 1 - stepRad / errRad);
-      attitude.multiply(qCorr).normalize();
-    }
-    updateView();
+    if (state.calibrated) updateView();
   }
 
   // ============================================================
-  // devicemotion: ジャイロ積算と足踏み検出
+  // devicemotion: 角速度 → 左右(ヨー) / 加速度 → 足踏み
   // ============================================================
   function handleMotion(event) {
     const now = performance.now();
     state.hasReceivedMotion = true;
 
-    // ---- 1. ジャイロ積算 ----
+    // ---- 1. ヨーの積分 ----
     const rot = event.rotationRate;
     const hasRot = rot && (rot.alpha !== null || rot.beta !== null || rot.gamma !== null);
-    if (hasRot && attitudeReady) {
+    if (hasRot) {
+      gyroActive = true;
       state.debug.gyroActive = true;
-      if (lastMotionTime !== null) {
+      if (lastMotionTime !== null && hasGravity) {
         const dt = Math.min((now - lastMotionTime) / 1000, 0.1);
         // 規格上 beta→端末X軸 / gamma→端末Y軸 / alpha→端末Z軸 まわりの角速度。
-        // これをカメラ座標系に変換する(画面の向きの打ち消しのみで足りる)。
         vOmega.set(
           THREE.MathUtils.degToRad(rot.beta || 0),
           THREE.MathUtils.degToRad(rot.gamma || 0),
           THREE.MathUtils.degToRad(rot.alpha || 0)
         );
-        deviceToCamera(vOmega);
-        // 重力補正の信頼度に使うため、回転の速さを記録しておく(急に変わらないよう平滑化)
-        lastRotMagDeg += 0.4 * (THREE.MathUtils.radToDeg(vOmega.length()) - lastRotMagDeg);
-        const angle = vOmega.length() * dt;
-        if (angle > 1e-7) {
-          vOmega.normalize();
-          qDelta.setFromAxisAngle(vOmega, angle);
-          attitude.multiply(qDelta).normalize();
-        }
+        // 「見ている方向が水平にどれだけ回ったか」を求める。
+        //
+        // 単純に重力軸まわりの成分(vOmega・up)だけを見ると、端末を傾けて構えている状態で
+        // 手首をひねったときにも成分が出てしまい、視線は動いていないのに横を向いてしまう。
+        // 正しい方位角の変化率は、前方ベクトルの回転から導いて
+        //   dψ/dt = (ω・up) - tan(pitch) * (ω・水平前方)
+        // となる(カメラの視線軸まわりの回転は、この式でちょうど打ち消される)。
+        const sinP = THREE.MathUtils.clamp(-vUpDevice.z, -1, 1);
+        const cosP = Math.max(Math.sqrt(Math.max(1 - sinP * sinP, 0)), 0.15);
+        // 端末座標系での「水平前方」単位ベクトル
+        vFwdH.set(0, 0, -1).addScaledVector(vUpDevice, -sinP).divideScalar(cosP);
+        const yawRate = vOmega.dot(vUpDevice) - (sinP / cosP) * vOmega.dot(vFwdH);
+        yawAccum += yawRate * dt;
+        state.debug.turnRateDeg = THREE.MathUtils.radToDeg(yawRate);
       }
       if (state.calibrated) updateView();
     }
@@ -1416,7 +1345,6 @@ const SensorSystem = (() => {
         stepStreak = 1;
       } else {
         stepStreak += 1;
-        lastStepGap = gap;
         state.debug.stepsPerMin = Math.round(60000 / Math.max(gap, 1));
       }
       if (stepStreak >= RUN_CONFIRM_STEPS) {
@@ -1424,8 +1352,7 @@ const SensorSystem = (() => {
       }
       curPeak = s;
     } else if (!stepArmed) {
-      // 閾値を超えている間は最大値を追いかけ、下がりきった時点で「足踏みの強さ」を確定する。
-      // (閾値を跨いだ瞬間の値ではピークにならず、強度が常に0になってしまうため)
+      // 閾値を超えている間は最大値を追いかけ、下がりきった時点で「足踏みの強さ」を確定する
       curPeak = Math.max(curPeak, s);
       if (s < STEP_REARM_TH) {
         stepArmed = true;
@@ -1475,25 +1402,17 @@ const SensorSystem = (() => {
 
   // 校正(視点リセット): いま構えている向き・上下の傾きを「正面・水平」にする
   function calibrate() {
-    if (!attitudeReady) {
-      calYaw = yawAccum; calPitch = 0;
-      state.calibrated = true;
-      updateView();
-      return;
-    }
-    vForward.set(0, 0, -1).applyQuaternion(attitude);
-    calPitch = Math.asin(THREE.MathUtils.clamp(vForward.y, -1, 1));
-    if (Math.abs(vForward.y) < YAW_FREEZE_DOT) {
-      const yawRaw = Math.atan2(-vForward.x, -vForward.z);
-      if (yawRawPrev !== null) {
-        let d = yawRaw - yawRawPrev;
-        while (d > Math.PI) d -= Math.PI * 2;
-        while (d < -Math.PI) d += Math.PI * 2;
-        yawAccum += d;
-      }
-      yawRawPrev = yawRaw;
-    }
     calYaw = yawAccum;
+    if (pitchRawFiltered !== null) {
+      // 極端な姿勢で校正しても下(または上)がまったく向けなくならないよう範囲を制限する
+      calPitch = THREE.MathUtils.clamp(
+        pitchRawFiltered,
+        THREE.MathUtils.degToRad(CAL_PITCH_MIN_DEG),
+        THREE.MathUtils.degToRad(CAL_PITCH_MAX_DEG)
+      );
+    } else {
+      calPitch = 0;
+    }
     state.calibrated = true;
 
     // 足踏み検出もリセットしておく(構え直しの揺れを歩数に数えないため)
@@ -4872,7 +4791,7 @@ const PvpSystem = (() => {
     const d = st.debug;
     el.sensorDebug.textContent =
       `YAW ${st.yawDeg.toFixed(0).padStart(4)}  PITCH ${st.pitchDeg.toFixed(0).padStart(4)}\n` +
-      `TILT-FIX ${d.tiltErrorDeg.toFixed(1)}deg  trust ${(d.tiltTrust * 100).toFixed(0)}%\n` +
+      `DEV-TILT ${d.devicePitchDeg.toFixed(0)}deg  TURN ${d.turnRateDeg.toFixed(0)}deg/s\n` +
       `STEP sig ${d.stepSignal.toFixed(2).padStart(6)}  peak ${d.stepPeak.toFixed(2).padStart(5)}\n` +
       `RUN ${st.isRunning ? 'YES' : 'no '}  pow ${st.runIntensity.toFixed(2)}  ${d.stepsPerMin}/min\n` +
       `ACC ${d.usingLinearAcc ? 'linear' : 'incl-gravity'}`;
