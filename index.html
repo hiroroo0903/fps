@@ -85,6 +85,39 @@ html, body {
    「隠したはずの手順がすべて表示される」不具合になる */
 .hidden { display: none !important; }
 
+/* 正面合わせ(キャリブレーション)画面 */
+.cal-figure {
+  width: 9rem; height: 9rem; margin: 0.8rem auto 0.4rem auto;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px dashed var(--panel-line); border-radius: 8px; position: relative;
+}
+.cal-figure::before {
+  content: ''; position: absolute; left: 10%; right: 10%; height: 2px;
+  background: var(--panel-line);
+}
+.cal-figure::after {
+  content: '正面'; position: absolute; right: 0.4rem; top: 50%;
+  transform: translateY(-140%); font-size: 0.6rem; color: var(--text-dim);
+}
+.cal-phone {
+  width: 1.3rem; height: 3.6rem; border: 2px solid var(--accent); border-radius: 4px;
+  background: rgba(255, 176, 32, 0.18); position: relative;
+}
+.cal-phone::after {
+  content: ''; position: absolute; left: 50%; top: 0.25rem; width: 0.35rem; height: 0.35rem;
+  margin-left: -0.175rem; border-radius: 50%; background: var(--accent);
+}
+.cal-readout {
+  font-family: 'Courier New', monospace; font-size: 0.78rem; color: var(--text-main);
+  min-height: 1.2rem;
+}
+.cal-warn { color: var(--danger); font-size: 0.75rem; min-height: 1.1rem; }
+.cal-count {
+  font-size: 3.2rem; color: var(--accent); font-weight: bold; line-height: 1.2;
+  min-height: 4rem; display: flex; align-items: center; justify-content: center;
+}
+.cal-count .cal-hold { font-size: 0.8rem; color: var(--text-dim); }
+
 /* 対戦の接続手順(ウィザード) */
 .pvp-back { align-self: flex-start; margin: 0 0 0.4rem 0; }
 .pvp-progress { display: flex; align-items: center; gap: 0.45rem; margin: 0.2rem 0 0.5rem 0; }
@@ -624,6 +657,24 @@ html, body {
 </div>
 
 <!-- 対戦モード: 接続画面 -->
+<!-- 正面合わせ(ゲーム開始前) -->
+<div id="screen-calibrate" class="screen hidden">
+  <h2 class="pvp-title">正面を合わせる</h2>
+  <p class="sub">
+    進みたい向き(正面)に<b>体ごと</b>向いてください。<br>
+    スマホは、いつも画面を見るときの角度で構えてOKです。
+  </p>
+
+  <div class="cal-figure"><div id="cal-phone" class="cal-phone"></div></div>
+  <div id="cal-readout" class="cal-readout">センサーを待っています…</div>
+  <div id="cal-warn" class="cal-warn hidden">端末を少し起こしてください</div>
+
+  <button id="btn-calibrate" class="btn-primary" disabled>この向きを正面にする</button>
+  <div id="cal-count" class="cal-count hidden"></div>
+
+  <p class="notice">ゲーム中も、画面右上の ⟲ ボタンでいつでも正面を取り直せます</p>
+</div>
+
 <div id="screen-pvp-connect" class="screen hidden">
   <h2 class="pvp-title">対戦(2人)</h2>
   <button id="btn-pvp-back" class="btn-secondary pvp-back">← 戻る</button>
@@ -1580,7 +1631,12 @@ const SensorSystem = (() => {
       gyroActive = true;
       state.debug.gyroActive = true;
       if (lastMotionTime !== null && hasGravity) {
-        const dt = Math.min((now - lastMotionTime) / 1000, 0.1);
+        // イベントの間隔が空いたときの上限。
+        // ここを短く切ると、処理が重くてイベントが遅れた分の回転が捨てられ、
+        // 「左右に振っても視点が思ったほど回らない」= 感度が落ちたように感じる。
+        // (実測: 間隔150msで本来の70%、250msで40%まで落ちていた)
+        // タブ復帰などの極端な飛びは、別途センサーの見張り(ensureRunning)が面倒を見る。
+        const dt = Math.min((now - lastMotionTime) / 1000, 0.3);
         // 規格上 beta→端末X軸 / gamma→端末Y軸 / alpha→端末Z軸 まわりの角速度。
         vOmega.set(
           THREE.MathUtils.degToRad(rot.beta || 0),
@@ -3674,9 +3730,9 @@ const PvpSystem = (() => {
 // ============================================================
 
 (() => {
-  const PLAYER_SPEED = 5.6;      // 矢印キー/後退・横移動ボタンの基準速度 (units/sec)
-  const RUN_SPEED_MIN = 4.0;     // 足踏みが弱いときの前進速度
-  const RUN_SPEED_MAX = 8.2;     // 足踏みが激しいときの前進速度
+  const PLAYER_SPEED = 7.2;      // 矢印キー/後退・横移動ボタンの基準速度 (units/sec)
+  const RUN_SPEED_MIN = 5.4;     // 足踏みが弱いときの前進速度
+  const RUN_SPEED_MAX = 11.0;    // 足踏みが激しいときの前進速度
   const STRAFE_RATIO = 0.72;     // 走行中の横移動速度(前進速度に対する比率)
   const DIAGONAL_MAX_RATIO = 1.15; // 斜め移動時に許す最大速度(前進速度に対する比率)
   const MOVE_ACCEL_TAU = 0.09;   // 加速の時定数(秒)。小さいほどキビキビ動く
@@ -3722,6 +3778,12 @@ const PvpSystem = (() => {
     gameoverTitle: document.getElementById('gameover-title'),
     btnQuitMission: document.getElementById('btn-quit-mission'),
     stageSelect: document.getElementById('stage-select'),
+    screenCalibrate: document.getElementById('screen-calibrate'),
+    calPhone: document.getElementById('cal-phone'),
+    calReadout: document.getElementById('cal-readout'),
+    calWarn: document.getElementById('cal-warn'),
+    calCount: document.getElementById('cal-count'),
+    btnCalibrate: document.getElementById('btn-calibrate'),
     hudTools: document.getElementById('hud-tools'),
     btnRecenter: document.getElementById('btn-recenter'),
     btnSensorDebug: document.getElementById('btn-sensor-debug'),
@@ -3800,7 +3862,8 @@ const PvpSystem = (() => {
   let lastFireTime = 0;
   let wasReloading = false;    // リロード開始の瞬間を検知するためのフラグ
   let lastFootstepCount = 0;
-  let sensorWatchdogTimer = 0;   // 足音再生のトリガー検知用
+  let sensorWatchdogTimer = 0;
+  let hudThrottle = 0;   // 足音再生のトリガー検知用
   // 対戦モード(2人)用
   let pvpIsHost = false;
   let pvpRespawning = false;
@@ -5498,7 +5561,7 @@ const PvpSystem = (() => {
 
   // ---- 画面遷移 ----
   function showScreen(target) {
-    [el.title, el.permError, el.hud, el.gameover, el.clear, el.pvpConnect, el.pvpResult]
+    [el.title, el.permError, el.hud, el.gameover, el.clear, el.pvpConnect, el.pvpResult, el.screenCalibrate]
       .forEach(s => s.classList.add('hidden'));
     if (target) target.classList.remove('hidden');
   }
@@ -5643,10 +5706,9 @@ const PvpSystem = (() => {
     }
     updateEnemyCountHud();
 
-    // 開始時の向きを正面として校正(実際のセンサー値が届くまで待ってから校正する。
-    // 許可直後は値がまだ届いておらず、初期値のまま校正してしまうバグの対策)
+    // 開始前に「正面合わせ」の画面を出し、プレイヤー自身に正面を決めてもらう
     await SensorSystem.waitForFirstOrientation();
-    SensorSystem.calibrate();
+    await runCalibration();
 
     startTime = performance.now();
     gameState = 'playing';
@@ -5935,7 +5997,7 @@ const PvpSystem = (() => {
     SensorSystem.ensureRunning();
 
     await SensorSystem.waitForFirstOrientation();
-    SensorSystem.calibrate();
+    await runCalibration();
 
     startTime = performance.now();
     gameState = 'playing';
@@ -6031,6 +6093,72 @@ const PvpSystem = (() => {
     el.pvpResultTitle.style.color = 'var(--danger)';
     el.pvpResultStats.textContent = `最終スコア: ${PvpSystem.getLocalScore()} - ${PvpSystem.getRemoteScore()}`;
     showScreen(el.pvpResult);
+  }
+
+  // ---- 正面合わせ(キャリブレーション) ----
+  // ゲーム開始前に「どちらが正面か」をプレイヤー自身に決めてもらう。
+  // 以前は開始ボタンを押した瞬間に自動で校正していたため、
+  // ボタンを押すときの手ブレや、まだ構えていない向きが正面になってしまうことがあった。
+  // ボタンを押してからカウントダウンを挟むことで、構え直す時間を作り、
+  // タップの揺れが収まってから校正する。
+  function runCalibration() {
+    return new Promise((resolve) => {
+      showScreen(el.screenCalibrate);
+      let counting = false;
+      let rafId = 0;
+      const startedAt = performance.now();
+
+      const tick = () => {
+        const st = SensorSystem.state;
+        const pitch = st.debug.devicePitchDeg || 0;
+        const alive = st.hasReceivedOrientation && st.debug.sensorIdleMs < 1500;
+        // 端末を横から見た図。実際の傾きに合わせて傾く
+        el.calPhone.style.transform = `rotate(${Math.max(-95, Math.min(95, pitch))}deg)`;
+        if (!st.hasReceivedOrientation) {
+          // センサーが無い端末(PCなど)でも先に進めるよう、数秒待ったらボタンを有効にする
+          const waited = performance.now() - startedAt > 4000;
+          el.calReadout.textContent = waited
+            ? 'センサーが検出できません(このまま開始できます)'
+            : 'センサーを待っています…';
+          el.btnCalibrate.disabled = counting || !waited;
+        } else {
+          el.calReadout.textContent =
+            `端末の傾き ${pitch.toFixed(0)}°   センサー ${alive ? '受信中' : '停止'}`;
+          el.btnCalibrate.disabled = counting;
+        }
+        // 真下を向くほど寝かせていると、下を向けなくなるので注意を出す
+        el.calWarn.classList.toggle('hidden', !(st.hasReceivedOrientation && pitch < -60));
+        rafId = requestAnimationFrame(tick);
+      };
+      tick();
+
+      const cleanup = () => {
+        cancelAnimationFrame(rafId);
+        el.btnCalibrate.removeEventListener('click', onConfirm);
+      };
+
+      async function onConfirm() {
+        if (counting) return;
+        counting = true;
+        el.btnCalibrate.classList.add('hidden');
+        el.calCount.classList.remove('hidden');
+        for (let n = 3; n >= 1; n--) {
+          el.calCount.innerHTML = `${n}<span class="cal-hold">　そのまま構えていてください</span>`;
+          AudioSystem.playReload();
+          await new Promise((r) => setTimeout(r, 650));
+        }
+        el.calCount.classList.add('hidden');
+        el.btnCalibrate.classList.remove('hidden');
+        cleanup();
+        SensorSystem.ensureRunning();
+        SensorSystem.calibrate();
+        resolve();
+      }
+
+      el.calCount.classList.add('hidden');
+      el.btnCalibrate.classList.remove('hidden');
+      el.btnCalibrate.addEventListener('click', onConfirm);
+    });
   }
 
   // ---- センサーのデバッグ表示 ----
@@ -6132,7 +6260,12 @@ const PvpSystem = (() => {
       }
 
       WeaponSystem.update(dt);
-      updateAmmoHud();
+      // HUDの更新は毎フレームやると描画レイアウトが頻発し、
+      // センサーイベントの遅延(=視点感度の低下)につながるため間引く
+      hudThrottle += dt;
+      const hudTick = hudThrottle > 0.1;
+      if (hudTick) hudThrottle = 0;
+      if (hudTick) updateAmmoHud();
       EnemyManager.update(dt);
       if (selectedMode === 'team') {
         AllyManager.update(dt);
@@ -6140,7 +6273,7 @@ const PvpSystem = (() => {
       }
       if (selectedMode === 'pvp') {
         PvpSystem.update(dt);
-        updatePvpScoreHud();
+        if (hudTick) updatePvpScoreHud();
 
         // リスポーン処理
         if (pvpRespawning) {
@@ -6168,7 +6301,7 @@ const PvpSystem = (() => {
         }
       }
       updateBulletHoles();
-      renderMinimap();
+      if (hudTick) renderMinimap();
     }
 
     if (renderer && scene && camera) {
