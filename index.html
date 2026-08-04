@@ -1136,12 +1136,6 @@ const SensorSystem = (() => {
     // 校正時の姿勢を基準にした相対姿勢(ヨー・ピッチ・ロールすべてが校正の対象)
     const rel = calibrationInverse.clone().multiply(rawQ);
 
-    // 表示・参考用にyaw・pitch・rollを抽出(YXZ順、あくまで参考値。実際のカメラには使わない)
-    const eDebug = new THREE.Euler().setFromQuaternion(rel, 'YXZ');
-    state.yawDeg = THREE.MathUtils.radToDeg(eDebug.y);
-    state.pitchDeg = THREE.MathUtils.radToDeg(eDebug.x);
-    state.rollDeg = THREE.MathUtils.radToDeg(eDebug.z);
-
     // 移動方向・見た目の向き: 実際の3Dベクトル(見ている方向)をrelから求める。
     const fwd3 = new THREE.Vector3(0, 0, -1).applyQuaternion(rel);
     const right3 = new THREE.Vector3(1, 0, 0).applyQuaternion(rel);
@@ -1162,6 +1156,13 @@ const SensorSystem = (() => {
     );
     const cameraEuler = new THREE.Euler(pitch, yaw, 0, 'YXZ');
     state.quaternion.setFromEuler(cameraEuler);
+
+    // デバッグ表示用: 実際にカメラが使っているヨー・ピッチをそのまま表示する
+    // (relの生のオイラー角分解はジンバルロック領域で暴れて紛らわしいため使わない)。
+    // ロールは常に0固定にしている(意図的に捨てているため)。
+    state.yawDeg = THREE.MathUtils.radToDeg(yaw);
+    state.pitchDeg = THREE.MathUtils.radToDeg(pitch);
+    state.rollDeg = 0;
 
     // 移動用ベクトルは水平面に投影して求める(カメラの見た目の向きと走る方向を一致させる)。
     fwd3.y = 0;
@@ -1187,50 +1188,29 @@ const SensorSystem = (() => {
     const q = computeDeviceQuaternion(event);
     currentRawQuaternion.copy(q);
     if (!gyroInitialized) {
-      // 追跡開始時の姿勢の初期値としてのみ、絶対値方式の結果を使う
       gyroQuat.copy(q);
       gyroInitialized = true;
     }
 
     if (!state.calibrated) return;
-    if (!gyroActive) {
-      // ジャイロの角速度が取得できない端末向けのフォールバック(従来の絶対値方式)
-      updateDerivedState(q);
-    }
+    // 姿勢は毎フレーム、alpha/beta/gammaから直接計算する(ジャイロ積算には頼らない)。
+    // ジャイロの角速度を積算する方式(gyroQuat)は理論上はジンバルロックに強いはずだったが、
+    // 実機での検証で、生のalpha/beta/gammaの値自体は正しいにもかかわらず、積算した結果
+    // (gyroQuat)だけが大きくズレる(例: 体を90度回しただけでyaw/pitch/rollが全て
+    // 数十度も食い違う)という不具合が確認されたため、積算方式の採用を取りやめた。
+    updateDerivedState(q);
   }
 
   function handleMotion(event) {
-    // ---- 姿勢追跡: ジャイロの角速度を積算して現在の向きを求める ----
+    // ---- 姿勢トラッキングはhandleOrientation側(alpha/beta/gammaの直接計算)に一本化した ----
+    // (以前はここでジャイロの角速度(rotationRate)を積算してgyroQuatを更新し、それを
+    // カメラ姿勢として使っていたが、実機検証で積算結果(gyroQuat)だけが大きくズレる
+    // 不具合が確認されたため、この積算処理は無効化した。rotationRateは以下の
+    // 「回転中かどうか」の判定(足踏み検出の抑制用)にのみ引き続き使用する)
     const rot = event.rotationRate;
     const hasRot = rot && (rot.alpha !== null || rot.beta !== null || rot.gamma !== null);
+    state.debugRaw.gyroActive = !!hasRot; // 表示用(現在はこの値で姿勢計算を切り替えてはいない)
     const now = performance.now();
-    if (hasRot && gyroInitialized) {
-      gyroActive = true;
-      state.debugRaw.gyroActive = true;
-      if (lastMotionTime !== null) {
-        let dt = (now - lastMotionTime) / 1000;
-        dt = Math.min(dt, 0.1); // タブ切り替え等での大きな時間差を抑制
-        // rotationRateの各成分(規格上はbeta→ローカルX軸, gamma→ローカルY軸, alpha→ローカルZ軸)は、
-        // computeDeviceQuaternion()が組み立てる姿勢クォータニオン(q1による90度補正込み)の
-        // ローカル座標系と、変換なしでそのまま一致する。
-        // (以前はここでさらにq1を掛けていたが、これによりY軸とZ軸の成分が入れ替わり符号も反転し、
-        // 「右を向くとカメラが下に動く」「上を向くとカメラが左に動く」という誤動作の原因になっていた。
-        // 単位クォータニオン基準での数値検証により、変換なしが正しいことを確認済み)
-        const omega = new THREE.Vector3(
-          THREE.MathUtils.degToRad(rot.beta || 0),
-          THREE.MathUtils.degToRad(rot.gamma || 0),
-          THREE.MathUtils.degToRad(rot.alpha || 0)
-        );
-        const angle = omega.length() * dt;
-        if (angle > 1e-7) {
-          omega.normalize();
-          const dq = new THREE.Quaternion().setFromAxisAngle(omega, angle);
-          gyroQuat.multiply(dq);
-          gyroQuat.normalize();
-        }
-      }
-      if (state.calibrated) updateDerivedState(gyroQuat);
-    }
     lastMotionTime = now;
 
     // 重力を含まない加速度(event.acceleration)が使えるならそちらを優先する。
@@ -1325,7 +1305,7 @@ const SensorSystem = (() => {
 
   // 初期校正: ゲーム開始時に構えている向き(上下の傾きも含む)を、そのまま正面(まっすぐ前)にする。
   function calibrate() {
-    const base = gyroActive ? gyroQuat : currentRawQuaternion;
+    const base = currentRawQuaternion; // alpha/beta/gammaから直接計算した最新の姿勢を基準にする
     calibrationInverse.copy(base).invert();
     state.calibrated = true;
     state.debugLastCalibrateYawDeg = 0; // 校正直後は差分0
@@ -4662,7 +4642,7 @@ const PvpSystem = (() => {
         const d = SensorSystem.state.debugRaw;
         const fmt = (v) => (v === null || v === undefined) ? '--' : v.toFixed(1);
         el.sensorDebug.textContent =
-          `gyro: ${d.gyroActive ? 'ON' : 'OFF(fallback)'}\n` +
+          `mode: direct(a/b/g)  rotationRate:${d.gyroActive ? 'yes' : 'no'}\n` +
           `alpha:${fmt(d.alpha)} beta:${fmt(d.beta)} gamma:${fmt(d.gamma)}\n` +
           `compass:${fmt(d.compass)}\n` +
           `yaw:${fmt(SensorSystem.state.yawDeg)} pitch:${fmt(SensorSystem.state.pitchDeg)} roll:${fmt(SensorSystem.state.rollDeg)}`;
