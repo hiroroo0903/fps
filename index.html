@@ -390,18 +390,27 @@ html, body {
 .fire-button:active { background: rgba(255, 59, 48, 0.5); }
 
 .strafe-button {
-  position: absolute; bottom: 1.2rem;
-  width: 3.2rem; height: 3.2rem;
+  --strafe-size: 4.4rem;    /* ボタンの直径 */
+  --strafe-offset: 1.7rem;  /* 中央からの間隔 */
+  position: absolute; bottom: 1.1rem;
+  width: var(--strafe-size); height: var(--strafe-size);
   border-radius: 50%;
-  background: rgba(219, 228, 214, 0.12);
+  background: rgba(219, 228, 214, 0.14);
   border: 2px solid var(--text-dim);
   color: var(--text-main);
-  font-size: 1.2rem;
+  font-size: 1.5rem;
   display: flex; align-items: center; justify-content: center;
   pointer-events: auto;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none; -webkit-user-select: none;
 }
-.strafe-button:active { background: rgba(219, 228, 214, 0.28); border-color: var(--accent); color: var(--accent); }
-.strafe-left { left: 50%; transform: translateX(-5.2rem); }
+/* 見た目より少し広い範囲で反応させて、押しやすくする */
+.strafe-button::after {
+  content: ''; position: absolute; inset: -0.25rem; border-radius: 50%;
+}
+.strafe-button:active { background: rgba(219, 228, 214, 0.32); border-color: var(--accent); color: var(--accent); }
+.strafe-left { left: 50%; transform: translateX(calc(-1 * (var(--strafe-offset) + var(--strafe-size)))); }
 
 .btn-quit-mission {
   position: absolute; left: 1rem; bottom: 1.2rem;
@@ -416,8 +425,17 @@ html, body {
 }
 .btn-quit-mission:active { color: var(--danger); border-color: var(--danger); }
 .btn-quit-mission.hidden { display: none; }
-.strafe-reload { left: 50%; transform: translateX(-1.6rem); font-size: 1.3rem; }
-.strafe-right { left: 50%; transform: translateX(2rem); }
+.strafe-reload {
+  left: 50%; --strafe-size: 2.6rem; font-size: 1.1rem;
+  transform: translateX(calc(var(--strafe-size) / -2));
+}
+.strafe-right { left: 50%; transform: translateX(var(--strafe-offset)); }
+
+/* 画面幅が狭い端末では少しだけ小さくして、FIREボタンと重ならないようにする */
+@media (max-width: 380px) {
+  .strafe-button { --strafe-size: 3.9rem; --strafe-offset: 1.5rem; }
+  .strafe-reload { --strafe-size: 2.4rem; }
+}
 
 .ammo-display {
   position: absolute; right: 1.1rem; bottom: 6.2rem;
@@ -431,6 +449,38 @@ html, body {
   border-radius: 3px;
   pointer-events: none;
 }
+/* ---- センサー用ツール(視点リセット / デバッグ表示) ---- */
+.hud-tools {
+  position: absolute; top: 4.8rem; right: 0.8rem;
+  display: flex; gap: 0.35rem;
+  pointer-events: auto;
+}
+.hud-tool-btn {
+  width: 2.1rem; height: 2.1rem;
+  background: rgba(10, 14, 10, 0.6);
+  border: 1px solid var(--panel-line);
+  color: var(--text-dim);
+  font-family: inherit; font-size: 0.9rem;
+  border-radius: 3px;
+  pointer-events: auto;
+}
+.hud-tool-btn:active { color: var(--accent); border-color: var(--accent); }
+.hud-tools.hidden { display: none; }
+
+.sensor-debug {
+  position: absolute; top: 7.3rem; right: 0.8rem;
+  background: rgba(10, 14, 10, 0.8);
+  border: 1px solid var(--panel-line);
+  color: var(--text-main);
+  font-family: 'Courier New', monospace;
+  font-size: 0.62rem; line-height: 1.5;
+  padding: 0.4rem 0.6rem;
+  border-radius: 3px;
+  white-space: pre;
+  pointer-events: none;
+}
+.sensor-debug.hidden { display: none; }
+
 .ammo-display.low { color: var(--accent); }
 .ammo-display.reloading { color: var(--danger); }
 
@@ -583,7 +633,6 @@ html, body {
 
 <!-- HUD(ゲームプレイ中) -->
 <div id="hud" class="hidden">
-  <div id="sensor-debug" style="position:fixed;top:4px;left:4px;z-index:9999;background:rgba(0,0,0,0.55);color:#0f0;font:11px/1.4 monospace;padding:4px 6px;border-radius:4px;pointer-events:none;white-space:pre;"></div>
   <div id="crosshair" class="crosshair">
     <div class="crosshair-line h"></div>
     <div class="crosshair-line v"></div>
@@ -618,6 +667,12 @@ html, body {
     <div class="enemy-count-label">残り敵</div>
     <div id="enemy-count" class="enemy-count-value">10</div>
   </div>
+
+  <div id="hud-tools" class="hud-tools">
+    <button id="btn-recenter" class="hud-tool-btn" aria-label="視点をリセット">⟲</button>
+    <button id="btn-sensor-debug" class="hud-tool-btn" aria-label="センサー情報">i</button>
+  </div>
+  <div id="sensor-debug" class="sensor-debug hidden"></div>
 
   <canvas id="minimap" class="minimap" width="130" height="130"></canvas>
 
@@ -1032,55 +1087,73 @@ function findPath(start, goal) {
 
 /* ==================== js/sensor.js ==================== */
 // ============================================================
-// sensor.js
+// sensor.js  (再設計版)
 // iPhoneのDeviceOrientation / DeviceMotionを扱うモジュール。
-// - 視点方向: 端末の向き(相対方位、開始時を基準0度として校正)
-// - 前進: その場駆け足の検出(加速度の周期的な上下振動)
-// (発射は画面タップのみ。振り上げジェスチャーは誤作動が多いため廃止)
+//
+// ---- 設計方針 ----
+// [A] 姿勢(視点)
+//   1. ジャイロ(rotationRate)を積算して滑らかな姿勢を得る。
+//   2. それだけでは誤差が溜まり、ゲーム内の「上」が現実の重力方向からずれていく。
+//      → 右を向き続けただけなのに視点が空を向いてしまう、という症状の原因。
+//      そこで毎フレーム、重力方向を使って傾きを少しずつ補正する(相補フィルタ)。
+//   3. 重力方向は deviceorientation の beta/gamma から求める。
+//      alpha(方位)は端末を立てると不安定になるが、重力方向は beta/gamma だけで
+//      一意に決まり破綻しないので、傾きの基準として安全に使える。
+//   4. 視点角はクォータニオン→オイラー角の変換を使わず、前方ベクトルから
+//      yaw/pitch を直接求める。真上・真下付近では yaw を凍結して暴れを防ぐ。
+//
+// [B] 足踏み(前進)検出
+//   1. 加速度を「重力方向(端末座標系での上方向)」に投影し、上下動だけを取り出す。
+//      こうすると端末を傾けても投影値はほぼ変わらないため、
+//      向きを変える動作を足踏みと誤検出しなくなる。
+//      → 以前は誤検出対策として回転中の検出を止めていたが、
+//        足踏み中は常に端末が揺れて回転判定になり、結果として一切前進できなかった。
+//        投影方式にしたことでこの抑制自体が不要になった。
+//   2. 遅い移動平均を引いてバンドパスし、ヒステリシス付きピーク検出で歩数を数える。
 // ============================================================
 
 const SensorSystem = (() => {
-  // ---- 定数(実機テストで調整する前提の初期値) ----
-  const RUN_PEAK_THRESHOLD = 2.8;      // 足踏み検出: 加速度変化のピーク閾値 (m/s^2, 高域成分)。軽い振動では反応しない強さ
-  const RUN_PEAK_INTENSE = 5.5;        // これ以上のピークで「最大強度の足踏み」とみなす
-  const RUN_MIN_INTERVAL_MS = 220;     // 足踏みのピーク間の最小間隔
-  const RUN_TIMEOUT_MS = 450;          // 直近のピークからこの時間内なら「駆け足中」とみなす
-  const RUN_CONFIRM_COUNT = 2;         // 何回連続でピークが検出されたら「駆け足」と確定するか(単発の振動を除外)
-  const RUN_STREAK_RESET_MS = 700;     // ピークの間隔がこれより空いたら連続回数をリセットする
-  const LOWPASS_ALPHA = 0.12;          // 重力/姿勢成分を推定する低域通過フィルタ係数
+  // ---- 姿勢の定数 ----
+  const TILT_CORRECT_GAIN = 0.05;   // 1イベントあたりの重力補正の強さ(0〜1)
+  const TILT_SNAP_DEG = 25;         // これ以上ずれていたら一気に合わせる(起動直後など)
+  const MAX_PITCH_DEG = 85;         // 視点の上下限界
+  const YAW_FREEZE_DOT = 0.995;     // 前方ベクトルがほぼ真上/真下のとき yaw を凍結
 
-  // ============================================================
-  // 姿勢トラッキングの設計(作り直し版)
-  //
-  // 【ピッチ(上下)】alpha/beta/gammaの絶対値から毎フレーム直接計算する。
-  //   betaは主に加速度センサー(重力方向)から求まる値で安定しており、
-  //   実際に問題なく動作することを確認済み。
-  //
-  // 【ヨー(左右)】alpha(方位角/コンパス)には一切頼らない。
-  //   コンパスは端末を垂直に構えた姿勢(beta≈90°付近、このゲームの基本姿勢そのもの)で
-  //   数学的・センサー的に不安定になり、突然ジャンプしたりじわじわ暴走したりする
-  //   (これまで何度も再現・確認した問題)。
-  //   代わりに、ジャイロスコープの角速度(rotationRate)を「その瞬間の重力方向
-  //   (=端末にとっての「鉛直軸」)への投影(内積)」という形で積算する。
-  //   この投影値は、端末が今どんな傾きで構えられていても「実世界の鉛直軸まわりに
-  //   今どれだけの速さで回転しているか」を直接表す量になり、オイラー角のような
-  //   特異点(ジンバルロック)を原理的に持たない。数値シミュレーションで
-  //   「純粋な左右回転」「純粋な上下チルト」「その組み合わせ」すべてについて
-  //   正しく分離できることを検証済み。
-  // ============================================================
+  // ---- 足踏み検出の定数(実機で調整しやすいよう1か所にまとめる) ----
+  const STEP_PEAK_TH = 1.6;         // 上下動のピーク閾値 (m/s^2)。小さいほど検出しやすい
+  const STEP_REARM_TH = 0.5;        // 一度これを下回るまで次のピークを数えない(二重カウント防止)
+  const STEP_STRONG = 6.0;          // これ以上のピークで「全力の足踏み」とみなす
+  const STEP_MIN_INTERVAL_MS = 170; // ピーク間の最小間隔
+  const STEP_MAX_INTERVAL_MS = 1000;// これ以上空いたら連続とみなさない
+  const RUN_CONFIRM_STEPS = 2;      // 何歩連続したら前進を開始するか
+  const RUN_TIMEOUT_MS = 700;       // 最後の歩からこの時間内なら前進を継続
+  const ACC_SLOW_ALPHA = 0.02;      // 遅い移動平均(重力・バイアス除去)
+  const ACC_FAST_ALPHA = 0.45;      // 速い平滑化(センサーノイズ除去)
 
-  let calibrationInverse = new THREE.Quaternion(); // 校正時の姿勢の逆クォータニオン(ピッチ計算用)
-  let currentRawQuaternion = new THREE.Quaternion(); // alpha/beta/gammaから求めた生のクォータニオン
-  let zee = new THREE.Vector3(0, 0, 1);
-  let euler = new THREE.Euler();
-  let q0 = new THREE.Quaternion();
-  let q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)); // -PI/2 around X
-
-  // ヨー(左右)はジャイロの積算値のみを使う。校正のたびに0にリセットする。
-  let gyroYawRad = 0;
-  let gyroYawAvailable = false; // rotationRateが一度でも使えたか(使えない端末では代わりにalpha由来の値にフォールバックする)
+  // ---- 内部の姿勢状態 ----
+  const attitude = new THREE.Quaternion();      // カメラ座標系→ワールド座標系(絶対姿勢)
+  let attitudeReady = false;
   let lastMotionTime = null;
 
+  const zee = new THREE.Vector3(0, 0, 1);
+  const worldUp = new THREE.Vector3(0, 1, 0);
+  const euler = new THREE.Euler();
+  const q0 = new THREE.Quaternion();
+  const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)); // -PI/2 around X
+  const qScreen = new THREE.Quaternion();
+  const qCorr = new THREE.Quaternion();
+  const qDelta = new THREE.Quaternion();
+  const vOmega = new THREE.Vector3();
+  const vUpDevice = new THREE.Vector3(0, 0, 1);  // 端末座標系での「上」(重力の逆向き)
+  const vUpCam = new THREE.Vector3(0, 1, 0);     // カメラ座標系での「上」(実測)
+  const vUpPred = new THREE.Vector3(0, 1, 0);    // カメラ座標系での「上」(積算による予測)
+  const vForward = new THREE.Vector3(0, 0, -1);
+  let hasGravity = false;
+
+  // 校正オフセット(重力基準のヨー・ピッチ)
+  let calYaw = 0;
+  let calPitch = 0;
+  let lastYawRaw = 0;
 
   function screenOrientationAngle() {
     if (screen.orientation && typeof screen.orientation.angle === 'number') {
@@ -1089,26 +1162,21 @@ const SensorSystem = (() => {
     return window.orientation || 0;
   }
 
-  function computeDeviceQuaternion(event) {
-    // このゲームは縦画面(portrait-primary)専用で、横向きの場合は警告画面を表示して
-    // プレイさせない仕様になっている。にもかかわらずscreen.orientation.angle /
-    // window.orientationを毎回読み取っていたが、これらの値はOSが実際に画面回転を
-    // 検出したタイミングでしか更新されないため、ページ読み込み時の端末の置き方
-    // (平らに置いていた等)によっては90度や-90度に「固定」されたままになることがある。
-    // この状態だと、ここでの角度補正がまるごと90度ズレてしまい、
-    // 「右を向くとカメラが下を向く」「上に傾けるとカメラが左に動く」といった
-    // 上下・左右の反応が入れ替わる症状が発生する(数値検証で再現・確認済み)。
-    // 縦画面専用である以上、動的に読み取る意味がないため常に0として扱う。
-    const orient = 0;
+  // 端末座標系のベクトルをカメラ座標系に変換する。
+  // attitude = Q_dev * q1 * q0 という定義から、両者の差は画面の向き(q0)だけになる。
+  function deviceToCamera(v) {
+    return v.applyQuaternion(
+      qScreen.setFromAxisAngle(zee, THREE.MathUtils.degToRad(screenOrientationAngle()))
+    );
+  }
 
-    // alpha(方位角)は端末を縦に構えた姿勢(beta≈90°付近)で不安定になることがある(iOSの既知の問題)。
-    // iOS Safariが提供するwebkitCompassHeadingはこの影響を受けにくいため、利用可能ならこちらを優先する。
-    // 回転方向・基準がalphaとは異なるが、常に相対値(校正との差分)としてしか使わないため問題ない。
+  // deviceorientation の値から絶対姿勢クォータニオンを作る(初期化・フォールバック用)
+  function computeDeviceQuaternion(event) {
+    const orient = THREE.MathUtils.degToRad(screenOrientationAngle());
     let alphaDeg = event.alpha;
     if (typeof event.webkitCompassHeading === 'number' && !Number.isNaN(event.webkitCompassHeading)) {
       alphaDeg = 360 - event.webkitCompassHeading;
     }
-
     euler.set(
       THREE.MathUtils.degToRad(event.beta),
       THREE.MathUtils.degToRad(alphaDeg),
@@ -1126,203 +1194,221 @@ const SensorSystem = (() => {
     supported: 'DeviceOrientationEvent' in window && 'DeviceMotionEvent' in window,
     permissionGranted: false,
     calibrated: false,
-    quaternion: new THREE.Quaternion(), // 校正済み・相対姿勢
+    quaternion: new THREE.Quaternion(), // 視点姿勢(ロールを除去済み)
     yawDeg: 0,
     pitchDeg: 0,
-    rollDeg: 0, // 左右の傾き(参考値、表示用)
-    forward: new THREE.Vector3(0, 0, -1), // 移動用の水平前進ベクトル(オイラー角を経由しない)
-    right: new THREE.Vector3(1, 0, 0),    // 移動用の水平右ベクトル
+    rollDeg: 0,
+    forward: new THREE.Vector3(0, 0, -1),
+    right: new THREE.Vector3(1, 0, 0),
     isRunning: false,
-    runIntensity: 0, // 足踏みの激しさ(0〜1)。移動速度のスケーリングに使用
-    lastRunPeakTime: 0,
-    runPeakStreak: 0, // 連続でピークが検出された回数(単発の振動を除外するため)
-    footstepCount: 0, // 確定した足踏みの回数(足音再生のトリガーに使用)
-    lastFastRotationTime: 0,
-    debugRaw: { alpha: null, beta: null, gamma: null, compass: null, rotMag: null, isRunning: false, gyroActive: false }, // デバッグ表示用の生センサー値
-    debugLastCalibrateYawDeg: null,
-    debugYawOffsetDeg: 0,
-    hasReceivedOrientation: false, // 実際のセンサー値を一度でも受信したか
+    runIntensity: 0,
+    footstepCount: 0,
+    hasReceivedOrientation: false,
+    hasReceivedMotion: false,
+    // デバッグ表示用
+    debug: {
+      stepSignal: 0,     // バンドパス後の上下動 (m/s^2)
+      stepPeak: 0,       // 直近のピーク値
+      stepsPerMin: 0,    // 推定ケイデンス
+      tiltErrorDeg: 0,   // 重力補正で修正している角度
+      usingLinearAcc: false,
+      gyroActive: false,
+    },
   };
 
-  // 低域通過フィルタ推定値(足踏み検出用の姿勢・重力成分のベースライン)
-  let lpX = 0, lpY = 0, lpZ = 0, lpInit = false;
-  // 重力方向専用の低域通過フィルタ(ヨー計算用。必ずaccelerationIncludingGravityから求める)
-  let gravLpX = 0, gravLpY = 0, gravLpZ = 0, gravLpInit = false;
+  // ---- 足踏み検出の内部状態 ----
+  let accSlow = 0, accFast = 0, accInit = false;
+  let stepArmed = true;
+  let curPeak = 0;
+  let lastStepTime = 0;
+  let stepStreak = 0;
+  let lastStepGap = 0;
 
-  function updateDerivedState(rawQ) {
-    // 校正時の姿勢を基準にした相対姿勢(ピッチ計算に使う)
-    const rel = calibrationInverse.clone().multiply(rawQ);
+  // ============================================================
+  // 視点の導出: 絶対姿勢 → yaw/pitch(ロールは捨てる)
+  // ============================================================
+  function updateView() {
+    vForward.set(0, 0, -1).applyQuaternion(attitude);
 
-    // 見ている方向の3Dベクトルをrelから求める(ピッチ抽出用)。
-    const fwd3 = new THREE.Vector3(0, 0, -1).applyQuaternion(rel);
+    const pitchRaw = Math.asin(THREE.MathUtils.clamp(vForward.y, -1, 1));
+    // 真上・真下付近では方位が定義できない(ジンバルロック)。直前の値を保持して暴れを防ぐ。
+    if (Math.abs(vForward.y) < YAW_FREEZE_DOT) {
+      lastYawRaw = Math.atan2(-vForward.x, -vForward.z);
+    }
 
-    // ピッチ(上下)はalpha/beta/gammaの絶対値から直接求める(これは安定して動作する)。
-    const PITCH_LIMIT = THREE.MathUtils.degToRad(89.5); // 真上/真下ちょうどでの特異点を避ける
-    const pitch = THREE.MathUtils.clamp(
-      Math.asin(THREE.MathUtils.clamp(fwd3.y, -1, 1)),
-      -PITCH_LIMIT,
-      PITCH_LIMIT
-    );
+    let yaw = lastYawRaw - calYaw;
+    while (yaw > Math.PI) yaw -= Math.PI * 2;
+    while (yaw < -Math.PI) yaw += Math.PI * 2;
 
-    // ヨー(左右)はジャイロの積算値(gyroYawRad)を使う。これはalpha(コンパス)に
-    // 一切依存しないため、端末を垂直に構えたときのコンパスの不安定さの影響を受けない。
-    // rotationRateが使えない端末向けのフォールバックとしてのみ、alphaから求めた
-    // 生のヨー値を使う。
-    const rawYaw = Math.atan2(-fwd3.x, -fwd3.z);
-    const yaw = gyroYawAvailable ? gyroYawRad : rawYaw;
+    const maxPitch = THREE.MathUtils.degToRad(MAX_PITCH_DEG);
+    const pitch = THREE.MathUtils.clamp(pitchRaw - calPitch, -maxPitch, maxPitch);
 
-    // カメラは常にロール0(ヨー・ピッチのみ)で組み立てる。一般的なFPSゲームと同じ方式で、
-    // 傾けたときに画面がレティクルを中心に回転してしまう問題を避けられる。
-    const cameraEuler = new THREE.Euler(pitch, yaw, 0, 'YXZ');
-    state.quaternion.setFromEuler(cameraEuler);
-
-    // デバッグ表示用
     state.yawDeg = THREE.MathUtils.radToDeg(yaw);
     state.pitchDeg = THREE.MathUtils.radToDeg(pitch);
-    state.rollDeg = 0;
 
-    // 移動用ベクトルは、実際にカメラが向いている方向から一貫して求める
-    // (見た目の向きと走る方向を必ず一致させるため)。
-    const fwdFromCamera = new THREE.Vector3(0, 0, -1).applyQuaternion(state.quaternion);
-    const rightFromCamera = new THREE.Vector3(1, 0, 0).applyQuaternion(state.quaternion);
-    fwdFromCamera.y = 0;
-    if (fwdFromCamera.lengthSq() > 1e-6) fwdFromCamera.normalize(); else fwdFromCamera.set(0, 0, -1);
-    rightFromCamera.y = 0;
-    if (rightFromCamera.lengthSq() > 1e-6) rightFromCamera.normalize(); else rightFromCamera.set(1, 0, 0);
+    euler.set(pitch, yaw, 0, 'YXZ');
+    state.quaternion.setFromEuler(euler);
 
-    state.forward.copy(fwdFromCamera);
-    state.right.copy(rightFromCamera);
+    // 移動方向はヨーだけで決まる(見ている方向と走る方向が必ず一致する)
+    state.forward.set(-Math.sin(yaw), 0, -Math.cos(yaw));
+    state.right.set(Math.cos(yaw), 0, -Math.sin(yaw));
   }
 
+  // ============================================================
+  // deviceorientation: 重力方向の取得と、姿勢の初期化
+  // ============================================================
   function handleOrientation(event) {
-    const hasCompass = typeof event.webkitCompassHeading === 'number' && !Number.isNaN(event.webkitCompassHeading);
     if (event.beta === null || event.gamma === null) return;
-    if (!hasCompass && event.alpha === null) return;
-
-    state.debugRaw.alpha = event.alpha;
-    state.debugRaw.beta = event.beta;
-    state.debugRaw.gamma = event.gamma;
-    state.debugRaw.compass = hasCompass ? event.webkitCompassHeading : null;
     state.hasReceivedOrientation = true;
 
-    // ピッチ(上下)計算用に、alpha/beta/gammaから求めた姿勢を保持しておく。
-    currentRawQuaternion.copy(computeDeviceQuaternion(event));
+    const beta = THREE.MathUtils.degToRad(event.beta);
+    const gamma = THREE.MathUtils.degToRad(event.gamma);
 
-    if (!state.calibrated) return;
-    updateDerivedState(currentRawQuaternion);
-  }
+    // 端末座標系での「上」(重力の逆向き)。beta/gammaだけで一意に決まり、alphaに依存しない。
+    vUpDevice.set(
+      -Math.cos(beta) * Math.sin(gamma),
+      Math.sin(beta),
+      Math.cos(beta) * Math.cos(gamma)
+    ).normalize();
+    hasGravity = true;
 
-  function handleMotion(event) {
-    const rot = event.rotationRate;
-    const hasRot = rot && (rot.alpha !== null || rot.beta !== null || rot.gamma !== null);
-    state.debugRaw.gyroActive = !!hasRot;
-    const now = performance.now();
-    const dt = lastMotionTime !== null ? Math.min((now - lastMotionTime) / 1000, 0.1) : null;
-    lastMotionTime = now;
+    // カメラ座標系に変換した実測の上方向
+    vUpCam.copy(vUpDevice);
+    deviceToCamera(vUpCam);
 
-    // 重力を含まない加速度(event.acceleration)が使えるならそちらを優先する(足踏み検出用)。
-    // accelerationIncludingGravityは、端末を「傾ける」だけでも重力の投影方向が変わり、
-    // 見かけ上の加速度が生じてしまう(=足踏みしていないのに前進判定されるバグの原因)。
-    const acc = (event.acceleration && event.acceleration.x !== null)
-      ? event.acceleration
-      : event.accelerationIncludingGravity;
-    if (!acc || acc.x === null) return;
-
-    // 回転速度(ジャイロ)が大きい間=構え直し・傾け動作の最中は、足踏み判定を抑制する
-    const rotMag = rot
-      ? Math.sqrt((rot.alpha || 0) ** 2 + (rot.beta || 0) ** 2 + (rot.gamma || 0) ** 2)
-      : 0;
-    if (rotMag > 45) { // deg/s。傾け動作は多くの場合これより速い
-      state.lastFastRotationTime = now;
-    }
-    // 回転中、および回転が収まった直後もしばらく(クールダウン)は足踏み判定を抑制する
-    // (重力方向の変化が低域通過フィルタに残り続けるため、回転直後も誤検知しやすい)
-    const isRotatingOrCoolingDown = (now - state.lastFastRotationTime) < 350;
-
-    if (!lpInit) {
-      lpX = acc.x; lpY = acc.y; lpZ = acc.z; lpInit = true;
+    if (!attitudeReady || !state.calibrated) {
+      // 校正が済むまでは絶対姿勢をそのまま使う(積算の出発点を最新に保つ)
+      const hasAlpha = event.alpha !== null ||
+        (typeof event.webkitCompassHeading === 'number' && !Number.isNaN(event.webkitCompassHeading));
+      if (hasAlpha) {
+        attitude.copy(computeDeviceQuaternion(event));
+        attitudeReady = true;
+        updateView();
+      }
       return;
     }
-    // 低域通過(姿勢・重力成分の推定。足踏み検出用)
-    lpX += LOWPASS_ALPHA * (acc.x - lpX);
-    lpY += LOWPASS_ALPHA * (acc.y - lpY);
-    lpZ += LOWPASS_ALPHA * (acc.z - lpZ);
 
-    // ---- 重力方向の推定(ヨー計算専用) ----
-    // 足踏み検出用の`acc`は重力を除いた値を優先するため、そのまま重力方向としては使えない。
-    // ヨーの計算には必ずaccelerationIncludingGravity(重力を含む生の加速度)を使う。
-    const gravRaw = event.accelerationIncludingGravity;
-    if (gravRaw && gravRaw.x !== null) {
-      if (!gravLpInit) {
-        gravLpX = gravRaw.x; gravLpY = gravRaw.y; gravLpZ = gravRaw.z; gravLpInit = true;
-      } else {
-        gravLpX += LOWPASS_ALPHA * (gravRaw.x - gravLpX);
-        gravLpY += LOWPASS_ALPHA * (gravRaw.y - gravLpY);
-        gravLpZ += LOWPASS_ALPHA * (gravRaw.z - gravLpZ);
-      }
+    // ---- 相補フィルタ: 積算で溜まった傾きの誤差を重力で補正する ----
+    // attitude はカメラ→ワールド。実測の上方向がワールドの上を向くように少しだけ回す。
+    vUpPred.copy(worldUp).applyQuaternion(attitude.clone().invert());
+    const dot = THREE.MathUtils.clamp(vUpCam.dot(vUpPred), -1, 1);
+    const errRad = Math.acos(dot);
+    state.debug.tiltErrorDeg = THREE.MathUtils.radToDeg(errRad);
+
+    if (errRad > 1e-4) {
+      qCorr.setFromUnitVectors(vUpCam, vUpPred);
+      const gain = errRad > THREE.MathUtils.degToRad(TILT_SNAP_DEG) ? 1 : TILT_CORRECT_GAIN;
+      if (gain < 1) qCorr.slerp(new THREE.Quaternion(), 1 - gain);
+      attitude.multiply(qCorr).normalize();
     }
+    updateView();
+  }
 
-    // ---- ヨー(左右)の積算: ジャイロの角速度を「その瞬間の重力方向(鉛直軸)」へ投影する ----
-    // rotationRateの各成分は規格上、beta→ローカルX軸、gamma→ローカルY軸、alpha→ローカルZ軸の
-    // 角速度(deg/s)を表す。これを、低域通過フィルタで推定した重力方向(=端末にとっての
-    // 鉛直軸)に投影(内積)すると、端末が今どんな傾きで構えられていても「実世界の鉛直軸
-    // まわりに今どれだけの速さで回転しているか」を直接表す値になる。
-    // オイラー角(alpha/beta/gamma)を経由しないため、ジンバルロックが原理的に起きない。
-    // 数値シミュレーションで、純粋な左右回転・純粋な上下チルト・その組み合わせのすべてに
-    // ついて正しく分離できることを検証済み。
-    if (hasRot && dt !== null && gravLpInit) {
-      const gLen = Math.hypot(gravLpX, gravLpY, gravLpZ);
-      if (gLen > 1e-6) {
-        const gx = gravLpX / gLen, gy = gravLpY / gLen, gz = gravLpZ / gLen;
-        const wx = THREE.MathUtils.degToRad(rot.beta || 0);
-        const wy = THREE.MathUtils.degToRad(rot.gamma || 0);
-        const wz = THREE.MathUtils.degToRad(rot.alpha || 0);
-        const yawRateWorld = wx * gx + wy * gy + wz * gz;
-        gyroYawRad += yawRateWorld * dt;
-        gyroYawAvailable = true;
-      }
-    }
+  // ============================================================
+  // devicemotion: ジャイロ積算と足踏み検出
+  // ============================================================
+  function handleMotion(event) {
+    const now = performance.now();
+    state.hasReceivedMotion = true;
 
-    // 高域成分(動きの急な変化)
-    const hx = acc.x - lpX;
-    const hy = acc.y - lpY;
-    const hz = acc.z - lpZ;
-    const highMag = Math.sqrt(hx * hx + hy * hy + hz * hz);
-
-    // --- 駆け足(足踏み)判定: 中程度の周期的ピーク ---
-    // 単発の振動(手首のブレなど)で反応しないよう、連続でピークが検出された場合のみ
-    // 「駆け足中」と判定する(1回目のピークだけでは前進しない)。
-    if (highMag > RUN_PEAK_THRESHOLD && !isRotatingOrCoolingDown && now - state.lastRunPeakTime > RUN_MIN_INTERVAL_MS) {
-      // 前回のピークから間隔が空きすぎていたら、連続回数をリセットしてから数え直す
-      if (now - state.lastRunPeakTime > RUN_STREAK_RESET_MS) {
-        state.runPeakStreak = 0;
-      }
-      state.runPeakStreak += 1;
-      state.lastRunPeakTime = now;
-
-      if (state.runPeakStreak >= RUN_CONFIRM_COUNT) {
-        // ピークの大きさから「足踏みの激しさ」(runIntensity, 0〜1)も算出する
-        const peakIntensity = Math.min(
-          1,
-          (highMag - RUN_PEAK_THRESHOLD) / (RUN_PEAK_INTENSE - RUN_PEAK_THRESHOLD)
+    // ---- 1. ジャイロ積算 ----
+    const rot = event.rotationRate;
+    const hasRot = rot && (rot.alpha !== null || rot.beta !== null || rot.gamma !== null);
+    if (hasRot && attitudeReady) {
+      state.debug.gyroActive = true;
+      if (lastMotionTime !== null) {
+        const dt = Math.min((now - lastMotionTime) / 1000, 0.1);
+        // 規格上 beta→端末X軸 / gamma→端末Y軸 / alpha→端末Z軸 まわりの角速度。
+        // これをカメラ座標系に変換する(画面の向きの打ち消しのみで足りる)。
+        vOmega.set(
+          THREE.MathUtils.degToRad(rot.beta || 0),
+          THREE.MathUtils.degToRad(rot.gamma || 0),
+          THREE.MathUtils.degToRad(rot.alpha || 0)
         );
-        // 急に変わりすぎないよう、直前の値と平滑化する
-        state.runIntensity = state.runIntensity * 0.4 + peakIntensity * 0.6;
-        state.footstepCount += 1; // 確定した足踏みのたびに増える(足音再生のトリガー用)
+        deviceToCamera(vOmega);
+        const angle = vOmega.length() * dt;
+        if (angle > 1e-7) {
+          vOmega.normalize();
+          qDelta.setFromAxisAngle(vOmega, angle);
+          attitude.multiply(qDelta).normalize();
+        }
+      }
+      if (state.calibrated) updateView();
+    }
+    lastMotionTime = now;
+
+    // ---- 2. 足踏み検出 ----
+    // 重力を含まない加速度が使えるならそちらを使う(iPhoneでは利用可能)
+    const linear = event.acceleration;
+    const useLinear = !!(linear && linear.x !== null);
+    const acc = useLinear ? linear : event.accelerationIncludingGravity;
+    state.debug.usingLinearAcc = useLinear;
+    if (!acc || acc.x === null) return;
+
+    // 上下方向(重力軸)の成分だけを取り出す。
+    // 端末座標系のまま投影するので、端末をどう傾けても投影値の意味が変わらない。
+    let vert;
+    if (hasGravity) {
+      vert = acc.x * vUpDevice.x + acc.y * vUpDevice.y + acc.z * vUpDevice.z;
+    } else {
+      vert = Math.sqrt((acc.x || 0) ** 2 + (acc.y || 0) ** 2 + (acc.z || 0) ** 2);
+    }
+
+    if (!accInit) {
+      accSlow = vert; accFast = 0; accInit = true;
+      return;
+    }
+    // バンドパス: 遅い平均を引いて(重力・姿勢成分を除去)、速い平滑化でノイズを落とす
+    accSlow += ACC_SLOW_ALPHA * (vert - accSlow);
+    accFast += ACC_FAST_ALPHA * ((vert - accSlow) - accFast);
+    const s = accFast;
+    state.debug.stepSignal = s;
+
+    // ヒステリシス付きピーク検出(1歩につき必ず1回だけ数える)
+    if (stepArmed && s > STEP_PEAK_TH && (now - lastStepTime) > STEP_MIN_INTERVAL_MS) {
+      stepArmed = false;
+      const gap = now - lastStepTime;
+      lastStepTime = now;
+      if (gap > STEP_MAX_INTERVAL_MS) {
+        stepStreak = 1;
+      } else {
+        stepStreak += 1;
+        lastStepGap = gap;
+        state.debug.stepsPerMin = Math.round(60000 / Math.max(gap, 1));
+      }
+      if (stepStreak >= RUN_CONFIRM_STEPS) {
+        state.footstepCount += 1;
+      }
+      curPeak = s;
+    } else if (!stepArmed) {
+      // 閾値を超えている間は最大値を追いかけ、下がりきった時点で「足踏みの強さ」を確定する。
+      // (閾値を跨いだ瞬間の値ではピークにならず、強度が常に0になってしまうため)
+      curPeak = Math.max(curPeak, s);
+      if (s < STEP_REARM_TH) {
+        stepArmed = true;
+        state.debug.stepPeak = curPeak;
+        if (stepStreak >= RUN_CONFIRM_STEPS) {
+          const intensity = THREE.MathUtils.clamp(
+            (curPeak - STEP_PEAK_TH) / (STEP_STRONG - STEP_PEAK_TH), 0, 1
+          );
+          state.runIntensity = state.runIntensity * 0.45 + intensity * 0.55;
+        }
+        curPeak = 0;
       }
     }
-    // 連続回数が確定条件に達していない間は「駆け足中」にしない
-    state.isRunning = state.runPeakStreak >= RUN_CONFIRM_COUNT && (now - state.lastRunPeakTime) < RUN_TIMEOUT_MS;
+
+    state.isRunning = stepStreak >= RUN_CONFIRM_STEPS && (now - lastStepTime) < RUN_TIMEOUT_MS;
     if (!state.isRunning) {
-      state.runIntensity *= 0.9; // 走っていない間は緩やかに減衰させる
+      state.runIntensity *= 0.9;
+      if ((now - lastStepTime) > STEP_MAX_INTERVAL_MS) {
+        stepStreak = 0;
+        state.debug.stepsPerMin = 0;
+      }
     }
-    state.debugRaw.rotMag = rotMag;
-    state.debugRaw.isRunning = state.isRunning;
   }
 
   async function requestPermission() {
     if (!state.supported) return false;
-
     try {
       if (typeof DeviceMotionEvent !== 'undefined' &&
           typeof DeviceMotionEvent.requestPermission === 'function') {
@@ -1330,7 +1416,6 @@ const SensorSystem = (() => {
         const orientPerm = await DeviceOrientationEvent.requestPermission();
         state.permissionGranted = motionPerm === 'granted' && orientPerm === 'granted';
       } else {
-        // iOS13未満 or 他ブラウザ: 許可プロンプト不要
         state.permissionGranted = true;
       }
     } catch (e) {
@@ -1345,19 +1430,34 @@ const SensorSystem = (() => {
     return state.permissionGranted;
   }
 
-  // 初期校正: ゲーム開始時に構えている向き(上下の傾きも含む)を、そのまま正面(まっすぐ前)にする。
+  // 校正(視点リセット): いま構えている向き・上下の傾きを「正面・水平」にする
   function calibrate() {
-    const base = currentRawQuaternion; // alpha/beta/gammaから直接計算した最新の姿勢を基準にする(ピッチ用)
-    calibrationInverse.copy(base).invert();
+    if (!attitudeReady) {
+      calYaw = 0; calPitch = 0;
+      state.calibrated = true;
+      updateView();
+      return;
+    }
+    vForward.set(0, 0, -1).applyQuaternion(attitude);
+    calPitch = Math.asin(THREE.MathUtils.clamp(vForward.y, -1, 1));
+    if (Math.abs(vForward.y) < YAW_FREEZE_DOT) {
+      lastYawRaw = Math.atan2(-vForward.x, -vForward.z);
+    }
+    calYaw = lastYawRaw;
     state.calibrated = true;
-    state.debugLastCalibrateYawDeg = 0; // 校正直後は差分0
-    // ヨーはジャイロの積算値なので、校正のたびに0(正面)にリセットする。
-    gyroYawRad = 0;
-    // 次のイベントを待たず、この瞬間の姿勢を即座に反映する
-    updateDerivedState(base);
+
+    // 足踏み検出もリセットしておく(構え直しの揺れを歩数に数えないため)
+    stepStreak = 0;
+    state.isRunning = false;
+    state.runIntensity = 0;
+    stepArmed = true;
+    curPeak = 0;
+    accInit = false;
+
+    updateView();
   }
 
-  // 実際のセンサー値が最低1回届くまで待つ(ゲーム開始時、初期値のまま校正してしまうのを防ぐ)
+  // 実際のセンサー値が最低1回届くまで待つ
   function waitForFirstOrientation(timeoutMs = 800) {
     return new Promise((resolve) => {
       if (state.hasReceivedOrientation) { resolve(); return; }
@@ -1378,6 +1478,7 @@ const SensorSystem = (() => {
     requestPermission,
     waitForFirstOrientation,
     calibrate,
+    recenter: calibrate,
   };
 })();
 
@@ -3209,6 +3310,10 @@ const PvpSystem = (() => {
   const PLAYER_SPEED = 5.6;      // 矢印キー/後退・横移動ボタンの基準速度 (units/sec)
   const RUN_SPEED_MIN = 4.0;     // 足踏みが弱いときの前進速度
   const RUN_SPEED_MAX = 8.2;     // 足踏みが激しいときの前進速度
+  const STRAFE_RATIO = 0.72;     // 走行中の横移動速度(前進速度に対する比率)
+  const DIAGONAL_MAX_RATIO = 1.15; // 斜め移動時に許す最大速度(前進速度に対する比率)
+  const MOVE_ACCEL_TAU = 0.09;   // 加速の時定数(秒)。小さいほどキビキビ動く
+  const MOVE_DECEL_TAU = 0.15;   // 減速の時定数(秒)。少し長めにして足踏み検出の途切れを吸収する
   const PLAYER_RADIUS = 0.35;    // 衝突判定用の簡易半径
   const EYE_HEIGHT = 1.65;
   const WALL_HEIGHT = 3.2;
@@ -3219,7 +3324,6 @@ const PvpSystem = (() => {
     title: document.getElementById('screen-title'),
     permError: document.getElementById('screen-permission-error'),
     hud: document.getElementById('hud'),
-    sensorDebug: document.getElementById('sensor-debug'),
     gameover: document.getElementById('screen-gameover'),
     clear: document.getElementById('screen-clear'),
     btnStart: document.getElementById('btn-start'),
@@ -3250,6 +3354,10 @@ const PvpSystem = (() => {
     gameoverStats: document.getElementById('gameover-stats'),
     gameoverTitle: document.getElementById('gameover-title'),
     btnQuitMission: document.getElementById('btn-quit-mission'),
+    hudTools: document.getElementById('hud-tools'),
+    btnRecenter: document.getElementById('btn-recenter'),
+    btnSensorDebug: document.getElementById('btn-sensor-debug'),
+    sensorDebug: document.getElementById('sensor-debug'),
     clearStats: document.getElementById('clear-stats'),
     // 対戦モード(2人)
     pvpConnect: document.getElementById('screen-pvp-connect'),
@@ -3307,6 +3415,7 @@ const PvpSystem = (() => {
   const BULLET_HOLE_FADE = 2500;      // ms(消える直前にフェードアウト)
   const BULLET_HOLE_MAX = 40;         // 上限数(古いものから除去)
   let playerPos = new THREE.Vector3();
+  let playerVelX = 0, playerVelZ = 0; // 実際の移動速度(補間して滑らかにする)
   let playerHP = PLAYER_MAX_HP;
   let lastFireTime = 0;
   let wasReloading = false;    // リロード開始の瞬間を検知するためのフラグ
@@ -4125,14 +4234,34 @@ const PvpSystem = (() => {
 
   // ---- 画面上の左右移動ボタン(押している間だけ移動。矢印キーと同じkeyStateを共有) ----
   function bindHoldButton(btnEl, stateKey) {
-    const press = (e) => { e.preventDefault(); e.stopPropagation(); keyState[stateKey] = true; };
-    const release = (e) => { e.preventDefault(); e.stopPropagation(); keyState[stateKey] = false; };
-    btnEl.addEventListener('touchstart', press, { passive: false });
-    btnEl.addEventListener('touchend', release, { passive: false });
-    btnEl.addEventListener('touchcancel', release, { passive: false });
-    btnEl.addEventListener('mousedown', press);
-    btnEl.addEventListener('mouseup', release);
-    btnEl.addEventListener('mouseleave', release);
+    // 指がボタンから少しずれても押しっぱなしと判定されるよう、
+    // ポインタをボタンにキャプチャする。指を離した時だけ解除される。
+    const press = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      keyState[stateKey] = true;
+      if (e.pointerId !== undefined && btnEl.setPointerCapture) {
+        try { btnEl.setPointerCapture(e.pointerId); } catch (err) { /* 無視 */ }
+      }
+    };
+    const release = (e) => {
+      if (e) { e.preventDefault(); e.stopPropagation(); }
+      keyState[stateKey] = false;
+    };
+    if (window.PointerEvent) {
+      btnEl.addEventListener('pointerdown', press, { passive: false });
+      btnEl.addEventListener('pointerup', release, { passive: false });
+      btnEl.addEventListener('pointercancel', release, { passive: false });
+    } else {
+      btnEl.addEventListener('touchstart', press, { passive: false });
+      btnEl.addEventListener('touchend', release, { passive: false });
+      btnEl.addEventListener('touchcancel', release, { passive: false });
+      btnEl.addEventListener('mousedown', press);
+      btnEl.addEventListener('mouseup', release);
+      btnEl.addEventListener('mouseleave', release);
+    }
+    // 何らかの理由で離した判定が来なかった場合の保険
+    window.addEventListener('blur', () => release(null));
+    document.addEventListener('visibilitychange', () => { if (document.hidden) release(null); });
   }
   bindHoldButton(el.btnStrafeLeft, 'left');
   bindHoldButton(el.btnStrafeRight, 'right');
@@ -4268,6 +4397,15 @@ const PvpSystem = (() => {
 
   el.btnQuitMission.addEventListener('click', abortMission);
 
+  // 視点リセット: いま構えている向きを「正面・水平」として取り直す
+  el.btnRecenter.addEventListener('click', () => {
+    SensorSystem.calibrate();
+  });
+  // センサーのデバッグ表示(足踏みの閾値を実機で確認するため)
+  el.btnSensorDebug.addEventListener('click', () => {
+    el.sensorDebug.classList.toggle('hidden');
+  });
+
   function missionClear() {
     gameState = 'clear';
     AudioSystem.playClear();
@@ -4322,6 +4460,7 @@ const PvpSystem = (() => {
     // プレイヤー状態リセット
     const startWorld = gridToWorld(PLAYER_START.gx, PLAYER_START.gy);
     playerPos.set(startWorld.x, 0, startWorld.z);
+    playerVelX = 0; playerVelZ = 0;
     camera.position.set(playerPos.x, EYE_HEIGHT + getGroundHeightAt(playerPos.x, playerPos.z), playerPos.z);
     playerHP = PLAYER_MAX_HP;
     updateHpHud();
@@ -4542,6 +4681,7 @@ const PvpSystem = (() => {
     const spawnGrid = isHostFlag ? PVP_SPAWN_HOST : PVP_SPAWN_GUEST;
     const startWorld = gridToWorld(spawnGrid.gx, spawnGrid.gy);
     playerPos.set(startWorld.x, 0, startWorld.z);
+    playerVelX = 0; playerVelZ = 0;
     camera.position.set(playerPos.x, EYE_HEIGHT + getGroundHeightAt(playerPos.x, playerPos.z), playerPos.z);
     playerHP = PLAYER_MAX_HP;
     updateHpHud();
@@ -4635,6 +4775,7 @@ const PvpSystem = (() => {
     const spawnGrid = pvpIsHost ? PVP_SPAWN_HOST : PVP_SPAWN_GUEST;
     const startWorld = gridToWorld(spawnGrid.gx, spawnGrid.gy);
     playerPos.set(startWorld.x, 0, startWorld.z);
+    playerVelX = 0; playerVelZ = 0;
     camera.position.set(playerPos.x, EYE_HEIGHT + getGroundHeightAt(playerPos.x, playerPos.z), playerPos.z);
     playerHP = PLAYER_MAX_HP;
     updateHpHud();
@@ -4670,6 +4811,23 @@ const PvpSystem = (() => {
     showScreen(el.pvpResult);
   }
 
+  // ---- センサーのデバッグ表示 ----
+  // 足踏みが検出されないときは STEP 行の数値を見て、
+  // sensor.js 冒頭の STEP_PEAK_TH をピーク値より少し低い値に調整する。
+  let debugFrame = 0;
+  function updateSensorDebug() {
+    if (el.sensorDebug.classList.contains('hidden')) return;
+    if ((debugFrame++ % 6) !== 0) return; // 表示は10fps程度で十分
+    const st = SensorSystem.state;
+    const d = st.debug;
+    el.sensorDebug.textContent =
+      `YAW ${st.yawDeg.toFixed(0).padStart(4)}  PITCH ${st.pitchDeg.toFixed(0).padStart(4)}\n` +
+      `TILT-FIX ${d.tiltErrorDeg.toFixed(1)}deg  GYRO ${d.gyroActive ? 'ON' : 'OFF'}\n` +
+      `STEP sig ${d.stepSignal.toFixed(2).padStart(6)}  peak ${d.stepPeak.toFixed(2).padStart(5)}\n` +
+      `RUN ${st.isRunning ? 'YES' : 'no '}  pow ${st.runIntensity.toFixed(2)}  ${d.stepsPerMin}/min\n` +
+      `ACC ${d.usingLinearAcc ? 'linear' : 'incl-gravity'}`;
+  }
+
   // ---- メインループ ----
   function animate() {
     requestAnimationFrame(animate);
@@ -4680,53 +4838,55 @@ const PvpSystem = (() => {
       // 視点: センサーの相対姿勢をそのままカメラに適用
       camera.quaternion.copy(SensorSystem.state.quaternion);
 
-      // デバッグ表示: ジャイロが実際に使われているか、生のセンサー値を画面左上に表示
-      // (原因切り分け用。問題解決後は削除してよい)
-      if (el.sensorDebug) {
-        const d = SensorSystem.state.debugRaw;
-        const fmt = (v) => (v === null || v === undefined) ? '--' : v.toFixed(1);
-        el.sensorDebug.textContent =
-          `pitch:absolute  yaw:${d.gyroActive ? 'gyro' : 'fallback(alpha)'}\n` +
-          `alpha:${fmt(d.alpha)} beta:${fmt(d.beta)} gamma:${fmt(d.gamma)}\n` +
-          `compass:${fmt(d.compass)}\n` +
-          `yaw:${fmt(SensorSystem.state.yawDeg)} pitch:${fmt(SensorSystem.state.pitchDeg)} roll:${fmt(SensorSystem.state.rollDeg)}`;
-      }
+      updateSensorDebug();
 
-      // 移動: 駆け足検出、または矢印キー/WASDで前進・後退・ストレイフ
-      // forward/rightはSensorSystem側でカメラの向きと同じクォータニオンから直接計算されるため、
-      // 見ている方向と走る方向が必ず一致する(オイラー角を経由しない)
+      // ---- 移動 ----
+      // 前後(足踏み/キー)と左右(横移動ボタン)を「速度ベクトル」として合成し、
+      // 実際の速度をそこへ滑らかに補間する。
+      // ・単純に合成ベクトルを正規化すると、横を押した瞬間に前進速度が7割に落ちて
+      //   ガクッと減速したように感じる。前進成分をなるべく保ったまま横に膨らませる。
+      // ・速度を補間することで、走行中に横ボタンを押し引きしても向きが滑らかに変わり、
+      //   足踏み検出が一瞬途切れてもガタつかない。
       const forwardVec = SensorSystem.state.forward;
       const rightVec = SensorSystem.state.right;
 
-      let moveX = 0, moveZ = 0;
-      let speedBudget = 0; // 有効な入力のうち最大の速度を採用する
-
+      // 前後方向の目標速度
+      let fwdSpeed = 0;
       if (SensorSystem.state.isRunning) {
-        moveX += forwardVec.x; moveZ += forwardVec.z;
         // 足踏みが激しいほど速く走れる
-        const runSpeed = RUN_SPEED_MIN + (RUN_SPEED_MAX - RUN_SPEED_MIN) * SensorSystem.state.runIntensity;
-        speedBudget = Math.max(speedBudget, runSpeed);
+        fwdSpeed = RUN_SPEED_MIN + (RUN_SPEED_MAX - RUN_SPEED_MIN) * SensorSystem.state.runIntensity;
       }
-      if (keyState.forward) {
-        moveX += forwardVec.x; moveZ += forwardVec.z;
-        speedBudget = Math.max(speedBudget, PLAYER_SPEED);
-      }
-      if (keyState.back) {
-        moveX -= forwardVec.x; moveZ -= forwardVec.z;
-        speedBudget = Math.max(speedBudget, PLAYER_SPEED);
-      }
-      if (keyState.left) {
-        moveX -= rightVec.x; moveZ -= rightVec.z;
-        speedBudget = Math.max(speedBudget, PLAYER_SPEED);
-      }
-      if (keyState.right) {
-        moveX += rightVec.x; moveZ += rightVec.z;
-        speedBudget = Math.max(speedBudget, PLAYER_SPEED);
+      if (keyState.forward) fwdSpeed = Math.max(fwdSpeed, PLAYER_SPEED);
+      if (keyState.back) fwdSpeed -= PLAYER_SPEED;
+
+      // 左右方向の目標速度。走行中は前進速度に比例させ、走るほど大きく斜めに曲がれる。
+      let latDir = 0;
+      if (keyState.right) latDir += 1;
+      if (keyState.left) latDir -= 1;
+      const strafeSpeed = Math.max(PLAYER_SPEED * 0.6, Math.abs(fwdSpeed) * STRAFE_RATIO);
+      const latSpeed = latDir * (fwdSpeed > 0.01 ? strafeSpeed : PLAYER_SPEED);
+
+      let targetX = forwardVec.x * fwdSpeed + rightVec.x * latSpeed;
+      let targetZ = forwardVec.z * fwdSpeed + rightVec.z * latSpeed;
+
+      // 斜めのときだけ速くなりすぎないよう、上限を掛ける(前進成分は極力残す)
+      const targetLen = Math.hypot(targetX, targetZ);
+      const maxSpeed = Math.max(Math.abs(fwdSpeed), Math.abs(latSpeed)) * DIAGONAL_MAX_RATIO;
+      if (targetLen > maxSpeed && targetLen > 1e-6) {
+        const k = maxSpeed / targetLen;
+        targetX *= k; targetZ *= k;
       }
 
-      if (moveX !== 0 || moveZ !== 0) {
-        const len = Math.hypot(moveX, moveZ);
-        movePlayer((moveX / len) * speedBudget * dt, (moveZ / len) * speedBudget * dt);
+      // 目標速度へ滑らかに追従(加速は速く、減速は少しゆっくり)
+      const curLen = Math.hypot(playerVelX, playerVelZ);
+      const tau = Math.hypot(targetX, targetZ) >= curLen ? MOVE_ACCEL_TAU : MOVE_DECEL_TAU;
+      const lerpK = 1 - Math.exp(-dt / tau);
+      playerVelX += (targetX - playerVelX) * lerpK;
+      playerVelZ += (targetZ - playerVelZ) * lerpK;
+      if (Math.hypot(playerVelX, playerVelZ) < 0.03) { playerVelX = 0; playerVelZ = 0; }
+
+      if (playerVelX !== 0 || playerVelZ !== 0) {
+        movePlayer(playerVelX * dt, playerVelZ * dt);
       }
       camera.position.set(playerPos.x, EYE_HEIGHT + getGroundHeightAt(playerPos.x, playerPos.z), playerPos.z);
 
@@ -4757,6 +4917,7 @@ const PvpSystem = (() => {
             const spawnGrid = pvpIsHost ? PVP_SPAWN_HOST : PVP_SPAWN_GUEST;
             const w = gridToWorld(spawnGrid.gx, spawnGrid.gy);
             playerPos.set(w.x, 0, w.z);
+            playerVelX = 0; playerVelZ = 0;
             camera.position.set(playerPos.x, EYE_HEIGHT + getGroundHeightAt(playerPos.x, playerPos.z), playerPos.z);
             playerHP = PLAYER_MAX_HP;
             updateHpHud();
