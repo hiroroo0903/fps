@@ -113,6 +113,7 @@ html, body {
 .difficulty-select {
   display: flex; gap: 0.5rem; margin: 0.3rem 0 0.5rem 0;
 }
+.difficulty-select.hidden { display: none; }
 .diff-card {
   background: var(--panel);
   border: 1px solid var(--panel-line);
@@ -151,6 +152,56 @@ html, body {
   cursor: pointer;
 }
 .btn-primary:active { background: var(--accent-dim); }
+
+.btn-secondary {
+  background: var(--panel);
+  color: var(--text-main);
+  border: 1px solid var(--panel-line);
+  font-family: inherit;
+  font-size: 0.85rem;
+  padding: 0.45rem 1.4rem;
+  clip-path: polygon(6% 0, 100% 0, 94% 100%, 0 100%);
+  margin-top: 0.4rem;
+  cursor: pointer;
+}
+.btn-secondary:active { border-color: var(--accent); color: var(--accent); }
+
+.pvp-title { color: var(--accent); font-size: 1.6rem; letter-spacing: 0.15rem; margin-bottom: 0.3rem; }
+.pvp-section { display: flex; flex-direction: column; align-items: center; gap: 0.3rem; width: 100%; max-width: 26rem; }
+.pvp-role-buttons { display: flex; gap: 1rem; margin: 0.5rem 0; }
+.pvp-step { color: var(--text-dim); font-size: 0.78rem; margin: 0.5rem 0 0.15rem 0; align-self: flex-start; }
+.pvp-code {
+  width: 100%;
+  background: #0e120e;
+  color: var(--safe-green);
+  border: 1px solid var(--panel-line);
+  font-family: 'Courier New', monospace;
+  font-size: 0.65rem;
+  padding: 0.4rem;
+  resize: none;
+}
+.pvp-status { color: var(--accent); font-size: 0.8rem; min-height: 1.2rem; margin-top: 0.3rem; }
+
+.hud-pvp-score {
+  position: absolute; top: 9.5rem; left: 50%; transform: translateX(-50%);
+  background: var(--panel);
+  border: 1px solid var(--panel-line);
+  padding: 0.3rem 0.9rem;
+  font-size: 0.95rem; font-weight: bold; color: var(--text-main);
+  display: flex; gap: 0.7rem; align-items: baseline;
+}
+.hud-pvp-score.hidden { display: none; }
+.pvp-timer { font-size: 0.75rem; color: var(--text-dim); font-weight: normal; }
+
+.pvp-respawn-overlay {
+  position: absolute; inset: 0;
+  background: rgba(10, 5, 5, 0.75);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  z-index: 15; pointer-events: none;
+}
+.pvp-respawn-overlay.hidden { display: none; }
+.pvp-respawn-text { color: var(--danger); font-size: 1.8rem; letter-spacing: 0.2rem; margin-bottom: 0.5rem; }
+.pvp-respawn-timer { color: var(--text-main); font-size: 2.6rem; font-weight: bold; }
 
 .notice { color: var(--text-dim); font-size: 0.72rem; margin-top: 0.5rem; }
 .sub { color: var(--text-dim); font-size: 0.85rem; }
@@ -281,8 +332,23 @@ html, body {
 }
 .strafe-button:active { background: rgba(219, 228, 214, 0.28); border-color: var(--accent); color: var(--accent); }
 .strafe-left { left: 50%; transform: translateX(-5.2rem); }
-.strafe-back { left: 50%; transform: translateX(-1.6rem); }
+.strafe-reload { left: 50%; transform: translateX(-1.6rem); font-size: 1.3rem; }
 .strafe-right { left: 50%; transform: translateX(2rem); }
+
+.ammo-display {
+  position: absolute; right: 1.1rem; bottom: 6.2rem;
+  background: rgba(10, 14, 10, 0.55);
+  border: 1px solid var(--panel-line);
+  color: var(--text-main);
+  font-family: 'Courier New', monospace;
+  font-size: 0.85rem;
+  letter-spacing: 0.05rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 3px;
+  pointer-events: none;
+}
+.ammo-display.low { color: var(--accent); }
+.ammo-display.reloading { color: var(--danger); }
 
 .gameover-title { color: var(--danger); font-size: 2.2rem; letter-spacing: 0.2rem; }
 .clear-title { color: var(--safe-green); font-size: 2.2rem; letter-spacing: 0.2rem; }
@@ -312,6 +378,10 @@ html, body {
       <span class="mode-name">チームバトル</span>
       <span class="mode-desc">味方4体と5vs5</span>
     </button>
+    <button class="mode-card" data-mode="pvp">
+      <span class="mode-name">対戦(2人)</span>
+      <span class="mode-desc">同じWiFi内の家族と対戦</span>
+    </button>
   </div>
 
   <div class="weapon-select">
@@ -327,7 +397,7 @@ html, body {
     </button>
   </div>
 
-  <div class="difficulty-select">
+  <div id="difficulty-select" class="difficulty-select">
     <button class="diff-card" data-difficulty="easy">
       <span class="diff-name">イージー</span>
     </button>
@@ -341,7 +411,8 @@ html, body {
 
   <div class="howto">
     <p>🏃 その場で駆け足 → 前進(激しく踏むほど速く走れる)</p>
-    <p>◀▼▶ 画面下部のボタン → 後退・横移動</p>
+    <p>◀▶ 画面下部のボタン → 横移動</p>
+    <p>⟳ 中央のボタン → リロード(10発でマガジン切れ)</p>
     <p>⌨️ 矢印キー/WASD → 移動(PCでの操作用)</p>
     <p>📱 端末の向き → 視点</p>
     <p>👆 画面をタップ → 発射</p>
@@ -357,6 +428,46 @@ html, body {
   <p>このゲームはモーションセンサーの利用を許可しないとプレイできません。</p>
   <p class="sub">設定アプリ &gt; Safari &gt; モーションと画面の向きのアクセス を確認し、再読み込みしてください。</p>
   <button id="btn-retry" class="btn-primary">もう一度試す</button>
+</div>
+
+<!-- 対戦モード: 接続画面 -->
+<div id="screen-pvp-connect" class="screen hidden">
+  <h2 class="pvp-title">対戦(2人)</h2>
+
+  <div id="pvp-role-select" class="pvp-section">
+    <p class="sub">同じWiFiに繋がっている家族のスマホと1対1で対戦します。<br>片方が「ホスト」、もう片方が「参加」を選んでください。</p>
+    <div class="pvp-role-buttons">
+      <button id="btn-pvp-host" class="btn-primary">ホストになる</button>
+      <button id="btn-pvp-join" class="btn-primary">参加する</button>
+    </div>
+    <button id="btn-pvp-back" class="btn-secondary">タイトルに戻る</button>
+  </div>
+
+  <div id="pvp-host-flow" class="pvp-section hidden">
+    <p class="pvp-step">① 下のコードを相手に送ってください(メッセージ等で)</p>
+    <textarea id="pvp-host-code" class="pvp-code" readonly rows="4"></textarea>
+    <button id="btn-pvp-copy-host" class="btn-secondary">コードをコピー</button>
+
+    <p class="pvp-step">② 相手から届いた返信コードを貼り付けてください</p>
+    <textarea id="pvp-host-paste" class="pvp-code" rows="4" placeholder="ここに貼り付け"></textarea>
+    <button id="btn-pvp-connect-host" class="btn-primary">接続する</button>
+
+    <p id="pvp-host-status" class="pvp-status"></p>
+  </div>
+
+  <div id="pvp-guest-flow" class="pvp-section hidden">
+    <p class="pvp-step">① ホストから届いたコードを貼り付けてください</p>
+    <textarea id="pvp-guest-paste" class="pvp-code" rows="4" placeholder="ここに貼り付け"></textarea>
+    <button id="btn-pvp-make-answer" class="btn-primary">返信コードを作成</button>
+
+    <div id="pvp-guest-step2" class="hidden">
+      <p class="pvp-step">② このコードをホストに送り返してください</p>
+      <textarea id="pvp-guest-code" class="pvp-code" readonly rows="4"></textarea>
+      <button id="btn-pvp-copy-guest" class="btn-secondary">コードをコピー</button>
+    </div>
+
+    <p id="pvp-guest-status" class="pvp-status"></p>
+  </div>
 </div>
 
 <!-- 3Dキャンバスをマウントする場所 -->
@@ -380,6 +491,16 @@ html, body {
     <div id="mates-value" class="mates-value">4/4</div>
   </div>
 
+  <div id="hud-pvp-score" class="hud-pvp-score hidden">
+    <span id="pvp-score-value">0 - 0</span>
+    <span id="pvp-timer-value" class="pvp-timer">3:00</span>
+  </div>
+
+  <div id="pvp-respawn-overlay" class="pvp-respawn-overlay hidden">
+    <div class="pvp-respawn-text">やられた…</div>
+    <div id="pvp-respawn-timer" class="pvp-respawn-timer">3</div>
+  </div>
+
   <div class="hud-top-right">
     <div class="enemy-count-label">残り敵</div>
     <div id="enemy-count" class="enemy-count-value">10</div>
@@ -390,8 +511,12 @@ html, body {
   <div id="damage-flash" class="damage-flash"></div>
   <div id="kill-message" class="kill-message"></div>
 
+  <div id="ammo-display" class="ammo-display">
+    <span id="ammo-value">10/10</span>
+  </div>
+
   <button id="btn-strafe-left" class="strafe-button strafe-left" aria-label="左に移動">◀</button>
-  <button id="btn-back" class="strafe-button strafe-back" aria-label="後退">▼</button>
+  <button id="btn-reload" class="strafe-button strafe-reload" aria-label="リロード">⟳</button>
   <button id="btn-strafe-right" class="strafe-button strafe-right" aria-label="右に移動">▶</button>
 
   <button id="btn-fire" class="fire-button" aria-label="発射">FIRE</button>
@@ -409,6 +534,13 @@ html, body {
   <h2 class="clear-title">MISSION CLEAR</h2>
   <p id="clear-stats" class="sub"></p>
   <button id="btn-restart-clear" class="btn-primary">タイトルに戻る</button>
+</div>
+
+<!-- 対戦結果画面 -->
+<div id="screen-pvp-result" class="screen hidden">
+  <h2 id="pvp-result-title" class="clear-title">WIN</h2>
+  <p id="pvp-result-stats" class="sub"></p>
+  <button id="btn-restart-pvp" class="btn-primary">タイトルに戻る</button>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
@@ -546,6 +678,10 @@ const DOORWAYS = computeDoorways();
 
 // プレイヤー開始位置(ルームAの中央付近)、グリッド座標
 const PLAYER_START = { gx: 3, gy: 3 };
+
+// 対戦モード(2人)用のスポーン地点。ホストはPLAYER_START、ゲストはこちらを使う
+const PVP_SPAWN_HOST = { gx: 3, gy: 3 };
+const PVP_SPAWN_GUEST = { gx: 22, gy: 3 }; // 東の増築室(I)、マップの反対側
 
 // 敵スポーン定義: 10種類、各1体。部屋ごとに意図的に配置。
 // type は enemies.js の ENEMY_TYPES のキーに対応
@@ -781,6 +917,7 @@ const SensorSystem = (() => {
     runIntensity: 0, // 足踏みの激しさ(0〜1)。移動速度のスケーリングに使用
     lastRunPeakTime: 0,
     runPeakStreak: 0, // 連続でピークが検出された回数(単発の振動を除外するため)
+    footstepCount: 0, // 確定した足踏みの回数(足音再生のトリガーに使用)
     lastFastRotationTime: 0,
     debugRaw: { alpha: null, beta: null, gamma: null, compass: null, rotMag: null, isRunning: false }, // デバッグ表示用の生センサー値
     debugLastCalibrateYawDeg: null,
@@ -891,6 +1028,7 @@ const SensorSystem = (() => {
         );
         // 急に変わりすぎないよう、直前の値と平滑化する
         state.runIntensity = state.runIntensity * 0.4 + peakIntensity * 0.6;
+        state.footstepCount += 1; // 確定した足踏みのたびに増える(足音再生のトリガー用)
       }
     }
     // 連続回数が確定条件に達していない間は「駆け足中」にしない
@@ -1107,6 +1245,48 @@ const AudioSystem = (() => {
     osc.stop(now + 0.5);
   }
 
+  // 小さな「カチッ」というクリック音(リロードの各動作に使う汎用パーツ)
+  function playClick(c, atTime, freq, duration, gainLevel) {
+    const osc = c.createOscillator();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(freq, atTime);
+    osc.frequency.exponentialRampToValueAtTime(freq * 0.6, atTime + duration);
+    const gain = c.createGain();
+    gain.gain.setValueAtTime(gainLevel, atTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, atTime + duration);
+    osc.connect(gain).connect(c.destination);
+    osc.start(atTime);
+    osc.stop(atTime + duration);
+  }
+
+  // リロード音: マガジンを抜く→差し込む→装填する、という一連の動作音(2秒のリロード時間に合わせる)
+  function playReload() {
+    const c = ensureContext();
+    const now = c.currentTime;
+    playClick(c, now, 260, 0.06, 0.3);          // マガジンリリース
+    playClick(c, now + 0.35, 180, 0.08, 0.32);  // マガジンを抜く
+    playClick(c, now + 1.15, 200, 0.08, 0.34);  // 新しいマガジンを差し込む
+    playClick(c, now + 1.5, 320, 0.05, 0.3);    // マガジンのロック
+    playClick(c, now + 1.75, 150, 0.1, 0.36);   // 装填(チャージングハンドル)
+  }
+
+  // 足音: 駆け足の1歩ごとに鳴らす、控えめな足音
+  function playFootstep() {
+    const c = ensureContext();
+    const now = c.currentTime;
+    const noise = c.createBufferSource();
+    noise.buffer = noiseBuffer(0.08);
+    const filter = c.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 500;
+    const gain = c.createGain();
+    gain.gain.setValueAtTime(0.14, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+    noise.connect(filter).connect(gain).connect(c.destination);
+    noise.start(now);
+    noise.stop(now + 0.09);
+  }
+
   // クリア音: 明るいファンファーレ風の短いアルペジオ
   function playClear() {
     const c = ensureContext();
@@ -1149,6 +1329,8 @@ const AudioSystem = (() => {
     playHurt,
     playKill,
     playTelegraph,
+    playReload,
+    playFootstep,
     playClear,
     playGameOver,
   };
@@ -1183,12 +1365,18 @@ const WEAPON_DEFS = {
   },
 };
 
+const MAG_SIZE = 10;          // マガジン容量(共通)
+const RELOAD_DURATION = 2.0;  // リロードにかかる時間(秒)
+
 const WeaponSystem = (() => {
   let currentKey = 'm4';
   let viewModelGroup = null;
   let recoilT = 0; // 反動アニメーションの進行度(0で静止)
   let flashT = 0;  // マズルフラッシュの進行度(0で非表示)
   let camera = null;
+  let currentAmmo = MAG_SIZE;
+  let isReloading = false;
+  let reloadTimer = 0;
 
   function buildViewModel(key) {
     const def = WEAPON_DEFS[key];
@@ -1289,6 +1477,9 @@ const WeaponSystem = (() => {
     }
     viewModelGroup = buildViewModel(key);
     if (camera) camera.add(viewModelGroup);
+    currentAmmo = MAG_SIZE;
+    isReloading = false;
+    reloadTimer = 0;
   }
 
   function getDamage() {
@@ -1297,6 +1488,46 @@ const WeaponSystem = (() => {
 
   function getCooldownMs() {
     return WEAPON_DEFS[currentKey].cooldownMs;
+  }
+
+  function getAmmo() {
+    return currentAmmo;
+  }
+
+  function getMagSize() {
+    return MAG_SIZE;
+  }
+
+  function getIsReloading() {
+    return isReloading;
+  }
+
+  function getReloadProgress() {
+    // 0(開始)〜1(完了直前)
+    return isReloading ? 1 - (reloadTimer / RELOAD_DURATION) : 0;
+  }
+
+  // 発射を試みる。撃てた場合はtrue、弾切れ・リロード中でダメだった場合はfalseを返す。
+  // 弾切れになった瞬間は自動的にリロードを開始する。
+  function tryConsumeAmmo() {
+    if (isReloading) return false;
+    if (currentAmmo <= 0) {
+      startReload();
+      return false;
+    }
+    currentAmmo -= 1;
+    if (currentAmmo <= 0) {
+      startReload(); // 最後の1発を撃ち切ったら自動リロード
+    }
+    return true;
+  }
+
+  // 手動リロード: 弾が残っていてもいつでも呼び出せる
+  function startReload() {
+    if (isReloading || currentAmmo >= MAG_SIZE) return false;
+    isReloading = true;
+    reloadTimer = RELOAD_DURATION;
+    return true;
   }
 
   function triggerRecoil() {
@@ -1308,13 +1539,29 @@ const WeaponSystem = (() => {
   }
 
   function update(dt) {
+    if (isReloading) {
+      reloadTimer -= dt;
+      if (reloadTimer <= 0) {
+        isReloading = false;
+        reloadTimer = 0;
+        currentAmmo = MAG_SIZE;
+      }
+    }
+
     if (viewModelGroup && recoilT > 0) {
       recoilT = Math.max(0, recoilT - dt * 6);
       const kick = recoilT * 0.06;
       viewModelGroup.position.z = -0.35 + kick;
       viewModelGroup.rotation.x = -recoilT * 0.15;
+    } else if (viewModelGroup && isReloading) {
+      // リロード中: 銃口を下に傾け、少し下げる(マガジン交換の演出)
+      const progress = getReloadProgress();
+      const dip = Math.sin(progress * Math.PI); // 0→1→0 のなだらかな上下
+      viewModelGroup.position.y = -0.16 - dip * 0.12;
+      viewModelGroup.rotation.x = dip * 0.4;
     } else if (viewModelGroup) {
       viewModelGroup.position.z = -0.35;
+      viewModelGroup.position.y = -0.16;
       viewModelGroup.rotation.x = 0;
     }
 
@@ -1337,7 +1584,10 @@ const WeaponSystem = (() => {
     return currentKey;
   }
 
-  return { init, setWeapon, getDamage, getCooldownMs, triggerRecoil, triggerMuzzleFlash, update, getCurrentKey };
+  return {
+    init, setWeapon, getDamage, getCooldownMs, triggerRecoil, triggerMuzzleFlash, update, getCurrentKey,
+    getAmmo, getMagSize, getIsReloading, getReloadProgress, tryConsumeAmmo, startReload,
+  };
 })();
 
 
@@ -1351,47 +1601,47 @@ const WeaponSystem = (() => {
 
 const ENEMY_TYPES = {
   grunt: {
-    label: 'グラント', attack: 'melee', hp: 60, speed: 2.0, dmg: 12,
+    label: 'グラント', attack: 'melee', hp: 60, speed: 2.5, dmg: 12,
     detectRange: 14, atkRange: 1.6, color: 0xcc4444, size: 1.0,
   },
   rusher: {
-    label: 'ラッシャー', attack: 'melee', hp: 35, speed: 3.4, dmg: 10,
+    label: 'ラッシャー', attack: 'melee', hp: 35, speed: 4.2, dmg: 10,
     detectRange: 15, atkRange: 1.5, color: 0xff8844, size: 0.8,
   },
   bruiser: {
-    label: 'ブルーザー', attack: 'melee', hp: 130, speed: 1.1, dmg: 18,
+    label: 'ブルーザー', attack: 'melee', hp: 130, speed: 1.4, dmg: 18,
     detectRange: 12, atkRange: 1.8, color: 0x884444, size: 1.4,
   },
   sniper: {
-    label: 'スナイパー', attack: 'ranged', hp: 30, speed: 1.0, dmg: 16,
+    label: 'スナイパー', attack: 'ranged', hp: 30, speed: 1.25, dmg: 16,
     detectRange: 20, atkRange: 16, color: 0x4488cc, size: 0.85,
     telegraphMs: 900, projectileSpeed: 14,
   },
   gunner: {
-    label: 'ガンナー', attack: 'ranged', hp: 55, speed: 1.8, dmg: 12,
+    label: 'ガンナー', attack: 'ranged', hp: 55, speed: 2.25, dmg: 12,
     detectRange: 14, atkRange: 10, color: 0x44aacc, size: 1.0,
     telegraphMs: 650, projectileSpeed: 12,
   },
   heavy: {
-    label: 'ヘヴィ', attack: 'ranged', hp: 140, speed: 0.9, dmg: 22,
+    label: 'ヘヴィ', attack: 'ranged', hp: 140, speed: 1.15, dmg: 22,
     detectRange: 13, atkRange: 11, color: 0x3366aa, size: 1.4,
     telegraphMs: 1000, projectileSpeed: 11,
   },
   scout: {
-    label: 'スカウト', attack: 'melee', hp: 20, speed: 4.2, dmg: 8,
+    label: 'スカウト', attack: 'melee', hp: 20, speed: 5.2, dmg: 8,
     detectRange: 18, atkRange: 1.4, color: 0xffbb33, size: 0.7,
   },
   guard: {
-    label: 'ガード', attack: 'melee', hp: 120, speed: 1.0, dmg: 16,
+    label: 'ガード', attack: 'melee', hp: 120, speed: 1.25, dmg: 16,
     detectRange: 8, atkRange: 1.7, color: 0x996633, size: 1.3,
   },
   skirmisher: {
-    label: 'スカーミッシャー', attack: 'ranged', hp: 40, speed: 2.6, dmg: 10,
+    label: 'スカーミッシャー', attack: 'ranged', hp: 40, speed: 3.25, dmg: 10,
     detectRange: 15, atkRange: 9, color: 0x66cccc, size: 0.9,
     telegraphMs: 550, projectileSpeed: 13,
   },
   juggernaut: {
-    label: 'ジャガーノート', attack: 'melee', hp: 220, speed: 0.8, dmg: 28,
+    label: 'ジャガーノート', attack: 'melee', hp: 220, speed: 1.0, dmg: 28,
     detectRange: 16, atkRange: 2.0, color: 0x661111, size: 1.7,
   },
 };
@@ -1418,55 +1668,78 @@ const EnemyManager = (() => {
   function buildMesh(def) {
     const s = def.size;
     const group = new THREE.Group();
-    const bodyMat = new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.7 });
+    const skinMat = new THREE.MeshStandardMaterial({ color: 0xe0ac80, roughness: 0.8 }); // 肌
+    const shirtMat = new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.75 }); // 上着(種類ごとの識別色)
+    const pantsMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(def.color).multiplyScalar(0.55), roughness: 0.8,
+    }); // ズボン(上着より暗い色)
+    const bootMat = new THREE.MeshStandardMaterial({ color: 0x2a2420, roughness: 0.7 }); // 靴
+    const hairMat = new THREE.MeshStandardMaterial({ color: 0x2c2115, roughness: 0.8 }); // 髪
     const gunMat = new THREE.MeshStandardMaterial({ color: 0x262626, roughness: 0.5, metalness: 0.4 });
     const coreMat = new THREE.MeshStandardMaterial({
       color: 0xffffff, emissive: 0x000000, emissiveIntensity: 1.2, roughness: 0.3,
     });
 
-    // 脚(腰のピボットから振れるように、それぞれグループ化)
-    const legGeo = new THREE.BoxGeometry(0.15 * s, 0.5 * s, 0.17 * s);
+    // 脚(腰のピボットから振れるように、それぞれグループ化)。ズボン+靴の2色構成
+    const legGeo = new THREE.BoxGeometry(0.14 * s, 0.38 * s, 0.15 * s);
+    const bootGeo = new THREE.BoxGeometry(0.15 * s, 0.12 * s, 0.19 * s);
     const legLPivot = new THREE.Group();
-    legLPivot.position.set(-0.13 * s, 0.5 * s, 0);
-    const legL = new THREE.Mesh(legGeo, bodyMat);
-    legL.position.set(0, -0.25 * s, 0);
+    legLPivot.position.set(-0.12 * s, 0.5 * s, 0);
+    const legL = new THREE.Mesh(legGeo, pantsMat);
+    legL.position.set(0, -0.19 * s, 0);
     legLPivot.add(legL);
+    const bootL = new THREE.Mesh(bootGeo, bootMat);
+    bootL.position.set(0, -0.42 * s, 0.02 * s);
+    legLPivot.add(bootL);
 
     const legRPivot = new THREE.Group();
-    legRPivot.position.set(0.13 * s, 0.5 * s, 0);
-    const legR = new THREE.Mesh(legGeo, bodyMat);
-    legR.position.set(0, -0.25 * s, 0);
+    legRPivot.position.set(0.12 * s, 0.5 * s, 0);
+    const legR = new THREE.Mesh(legGeo, pantsMat);
+    legR.position.set(0, -0.19 * s, 0);
     legRPivot.add(legR);
+    const bootR = new THREE.Mesh(bootGeo, bootMat);
+    bootR.position.set(0, -0.42 * s, 0.02 * s);
+    legRPivot.add(bootR);
 
     group.add(legLPivot, legRPivot);
 
-    // 胴体
-    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.36 * s, 0.48 * s, 0.24 * s), bodyMat);
-    torso.position.set(0, 0.74 * s, 0);
+    // 胴体(肩幅を持たせた上着)
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.34 * s, 0.42 * s, 0.2 * s), shirtMat);
+    torso.position.set(0, 0.73 * s, 0);
     group.add(torso);
 
-    // 頭
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.15 * s, 8, 8), bodyMat);
-    head.position.set(0, 1.08 * s, 0);
+    // 頭(肌色)+ 髪
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.135 * s, 10, 8), skinMat);
+    head.position.set(0, 1.05 * s, 0);
     group.add(head);
+    const hair = new THREE.Mesh(new THREE.SphereGeometry(0.14 * s, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.55), hairMat);
+    hair.position.set(0, 1.09 * s, 0);
+    group.add(hair);
 
-    // 索敵・攻撃予兆の状態を示すコア(頭部の発光点)
-    const core = new THREE.Mesh(new THREE.SphereGeometry(0.05 * s, 6, 6), coreMat);
-    core.position.set(0, 1.09 * s, 0.13 * s);
+    // 索敵・攻撃予兆の状態を示すコア(胸につけたバッジ状の発光インジケーター)
+    const core = new THREE.Mesh(new THREE.SphereGeometry(0.045 * s, 6, 6), coreMat);
+    core.position.set(0, 0.82 * s, 0.11 * s);
     group.add(core);
 
-    // 左腕(体側に添える)
-    const armGeo = new THREE.BoxGeometry(0.12 * s, 0.4 * s, 0.12 * s);
-    const armL = new THREE.Mesh(armGeo, bodyMat);
-    armL.position.set(-0.26 * s, 0.7 * s, 0);
+    // 左腕(体側に添える)。上着の色+肌色の手
+    const armGeo = new THREE.BoxGeometry(0.1 * s, 0.34 * s, 0.1 * s);
+    const handGeo = new THREE.SphereGeometry(0.06 * s, 8, 6);
+    const armL = new THREE.Mesh(armGeo, shirtMat);
+    armL.position.set(-0.24 * s, 0.68 * s, 0);
     armL.rotation.z = 0.2;
     group.add(armL);
+    const handL = new THREE.Mesh(handGeo, skinMat);
+    handL.position.set(-0.29 * s, 0.5 * s, 0);
+    group.add(handL);
 
     // 右腕(銃を前方に構える)
-    const armR = new THREE.Mesh(armGeo, bodyMat);
-    armR.position.set(0.2 * s, 0.86 * s, 0.14 * s);
+    const armR = new THREE.Mesh(armGeo, shirtMat);
+    armR.position.set(0.2 * s, 0.84 * s, 0.14 * s);
     armR.rotation.x = -1.15;
     group.add(armR);
+    const handR = new THREE.Mesh(handGeo, skinMat);
+    handR.position.set(0.2 * s, 0.62 * s, 0.32 * s);
+    group.add(handR);
 
     // 銃(右腕の先、前方に構えた状態)
     const gunGroup = new THREE.Group();
@@ -1485,7 +1758,7 @@ const EnemyManager = (() => {
       new THREE.SphereGeometry(0.24 * s, 8, 8),
       new THREE.MeshBasicMaterial({ visible: false })
     );
-    headHitbox.position.y = 1.08 * s;
+    headHitbox.position.y = 1.06 * s;
     headHitbox.userData.isHead = true;
     group.add(headHitbox);
 
@@ -1528,6 +1801,7 @@ const EnemyManager = (() => {
       mesh,
       hp: def.hp,
       maxHp: def.hp,
+      bodyHits: 0, // 体への命中回数(BODY_HITS_TO_KILL発で撃破)
       pos: new THREE.Vector3(world.x, 0, world.z),
       state: 'idle', // idle(巡回中) | chase | telegraph | melee_range
       path: [],
@@ -1589,6 +1863,8 @@ const EnemyManager = (() => {
     }
   }
 
+  const BODY_HITS_TO_KILL = 5; // 体に何発当てれば倒せるか(ヘッドショットは常に即撃破)
+
   function damageEnemy(enemy, amount, isHeadshot) {
     if (!enemy.alive) return;
 
@@ -1596,12 +1872,11 @@ const EnemyManager = (() => {
       // ヘッドショットは確実に撃破
       enemy.hp = 0;
     } else {
-      // 体への攻撃: 満タンHPからの初弾では一撃で倒れないようにする(最低1は残す)
-      let dmg = amount;
-      if (enemy.hp >= enemy.maxHp) {
-        dmg = Math.min(amount, enemy.maxHp - 1);
-      }
-      enemy.hp -= dmg;
+      // 体への攻撃: ダメージ量ではなく「命中回数」で判定する。
+      // BODY_HITS_TO_KILL発当てるまでは倒れない(与えるダメージが大きい武器でも即死しない)。
+      enemy.bodyHits = (enemy.bodyHits || 0) + 1;
+      enemy.hp = Math.max(0, enemy.maxHp * (1 - enemy.bodyHits / BODY_HITS_TO_KILL));
+      if (enemy.bodyHits >= BODY_HITS_TO_KILL) enemy.hp = 0;
     }
 
     if (enemy.hp <= 0) {
@@ -1856,19 +2131,19 @@ const EnemyManager = (() => {
 
 const ALLY_TYPES = {
   assault: {
-    label: 'アサルト', hp: 70, speed: 2.3, dmg: 14,
+    label: 'アサルト', hp: 70, speed: 2.9, dmg: 14,
     atkRange: 9, detectRange: 16, cooldown: 0.9, color: 0x3388ff, size: 1.0,
   },
   scout: {
-    label: 'スカウト', hp: 45, speed: 3.4, dmg: 10,
+    label: 'スカウト', hp: 45, speed: 4.2, dmg: 10,
     atkRange: 7, detectRange: 18, cooldown: 0.7, color: 0x33bbff, size: 0.85,
   },
   heavy: {
-    label: 'ヘヴィ', hp: 130, speed: 1.2, dmg: 20,
+    label: 'ヘヴィ', hp: 130, speed: 1.5, dmg: 20,
     atkRange: 8, detectRange: 14, cooldown: 1.2, color: 0x2255aa, size: 1.4,
   },
   marksman: {
-    label: 'マークスマン', hp: 50, speed: 1.4, dmg: 24,
+    label: 'マークスマン', hp: 50, speed: 1.75, dmg: 24,
     atkRange: 15, detectRange: 20, cooldown: 1.4, color: 0x66aaff, size: 0.9,
   },
 };
@@ -1885,48 +2160,71 @@ const AllyManager = (() => {
   function buildMesh(def) {
     const s = def.size;
     const group = new THREE.Group();
-    const bodyMat = new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.6, metalness: 0.15 });
+    const skinMat = new THREE.MeshStandardMaterial({ color: 0xe0ac80, roughness: 0.8 }); // 肌
+    const shirtMat = new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.7, metalness: 0.1 }); // 上着(味方チームカラー)
+    const pantsMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(def.color).multiplyScalar(0.5), roughness: 0.8,
+    }); // ズボン
+    const bootMat = new THREE.MeshStandardMaterial({ color: 0x22242a, roughness: 0.7 }); // 靴
+    const hairMat = new THREE.MeshStandardMaterial({ color: 0x1c2430, roughness: 0.8 }); // 髪
     const gunMat = new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.5, metalness: 0.4 });
     const coreMat = new THREE.MeshStandardMaterial({
       color: 0x3388ff, emissive: 0x1155aa, emissiveIntensity: 1.2, roughness: 0.3,
     });
 
-    const legGeo = new THREE.BoxGeometry(0.15 * s, 0.5 * s, 0.17 * s);
+    const legGeo = new THREE.BoxGeometry(0.14 * s, 0.38 * s, 0.15 * s);
+    const bootGeo = new THREE.BoxGeometry(0.15 * s, 0.12 * s, 0.19 * s);
     const legLPivot = new THREE.Group();
-    legLPivot.position.set(-0.13 * s, 0.5 * s, 0);
-    const legL = new THREE.Mesh(legGeo, bodyMat);
-    legL.position.set(0, -0.25 * s, 0);
+    legLPivot.position.set(-0.12 * s, 0.5 * s, 0);
+    const legL = new THREE.Mesh(legGeo, pantsMat);
+    legL.position.set(0, -0.19 * s, 0);
     legLPivot.add(legL);
+    const bootL = new THREE.Mesh(bootGeo, bootMat);
+    bootL.position.set(0, -0.42 * s, 0.02 * s);
+    legLPivot.add(bootL);
 
     const legRPivot = new THREE.Group();
-    legRPivot.position.set(0.13 * s, 0.5 * s, 0);
-    const legR = new THREE.Mesh(legGeo, bodyMat);
-    legR.position.set(0, -0.25 * s, 0);
+    legRPivot.position.set(0.12 * s, 0.5 * s, 0);
+    const legR = new THREE.Mesh(legGeo, pantsMat);
+    legR.position.set(0, -0.19 * s, 0);
     legRPivot.add(legR);
+    const bootR = new THREE.Mesh(bootGeo, bootMat);
+    bootR.position.set(0, -0.42 * s, 0.02 * s);
+    legRPivot.add(bootR);
     group.add(legLPivot, legRPivot);
 
-    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.36 * s, 0.48 * s, 0.24 * s), bodyMat);
-    torso.position.set(0, 0.74 * s, 0);
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.34 * s, 0.42 * s, 0.2 * s), shirtMat);
+    torso.position.set(0, 0.73 * s, 0);
     group.add(torso);
 
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.15 * s, 8, 8), bodyMat);
-    head.position.set(0, 1.08 * s, 0);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.135 * s, 10, 8), skinMat);
+    head.position.set(0, 1.05 * s, 0);
     group.add(head);
+    const hair = new THREE.Mesh(new THREE.SphereGeometry(0.14 * s, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.55), hairMat);
+    hair.position.set(0, 1.09 * s, 0);
+    group.add(hair);
 
-    const core = new THREE.Mesh(new THREE.SphereGeometry(0.05 * s, 6, 6), coreMat);
-    core.position.set(0, 1.09 * s, 0.13 * s);
+    const core = new THREE.Mesh(new THREE.SphereGeometry(0.045 * s, 6, 6), coreMat);
+    core.position.set(0, 0.82 * s, 0.11 * s);
     group.add(core);
 
-    const armGeo = new THREE.BoxGeometry(0.12 * s, 0.4 * s, 0.12 * s);
-    const armL = new THREE.Mesh(armGeo, bodyMat);
-    armL.position.set(-0.26 * s, 0.7 * s, 0);
+    const armGeo = new THREE.BoxGeometry(0.1 * s, 0.34 * s, 0.1 * s);
+    const handGeo = new THREE.SphereGeometry(0.06 * s, 8, 6);
+    const armL = new THREE.Mesh(armGeo, shirtMat);
+    armL.position.set(-0.24 * s, 0.68 * s, 0);
     armL.rotation.z = 0.2;
     group.add(armL);
+    const handL = new THREE.Mesh(handGeo, skinMat);
+    handL.position.set(-0.29 * s, 0.5 * s, 0);
+    group.add(handL);
 
-    const armR = new THREE.Mesh(armGeo, bodyMat);
-    armR.position.set(0.2 * s, 0.86 * s, 0.14 * s);
+    const armR = new THREE.Mesh(armGeo, shirtMat);
+    armR.position.set(0.2 * s, 0.84 * s, 0.14 * s);
     armR.rotation.x = -1.15;
     group.add(armR);
+    const handR = new THREE.Mesh(handGeo, skinMat);
+    handR.position.set(0.2 * s, 0.62 * s, 0.32 * s);
+    group.add(handR);
 
     const gunGroup = new THREE.Group();
     const gunBody = new THREE.Mesh(new THREE.BoxGeometry(0.08 * s, 0.08 * s, 0.5 * s), gunMat);
@@ -2150,6 +2448,330 @@ const AllyManager = (() => {
 })();
 
 
+/* ==================== js/net.js ==================== */
+// ============================================================
+// net.js
+// WebRTCによるサーバー不要のP2P通信。接続コード(SDP)を手動で
+// 交換することでシグナリングサーバーなしに接続を確立する。
+// 同じ家の中など、家族間での対戦を想定した簡易実装。
+// ============================================================
+
+const NetSystem = (() => {
+  let pc = null;
+  let dc = null;
+  let onMessageCallback = null;
+  let onOpenCallback = null;
+  let onCloseCallback = null;
+
+  // Googleが無料公開しているSTUNサーバー(自前のサーバーは不要)
+  const ICE_SERVERS = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+  ];
+
+  // ICE候補の収集が終わるまで待つ(手動交換のコードを1つだけで済ませるため)
+  function waitIceComplete(peerConn) {
+    return new Promise((resolve) => {
+      if (peerConn.iceGatheringState === 'complete') { resolve(); return; }
+      const check = () => {
+        if (peerConn.iceGatheringState === 'complete') {
+          peerConn.removeEventListener('icegatheringstatechange', check);
+          resolve();
+        }
+      };
+      peerConn.addEventListener('icegatheringstatechange', check);
+      // 一部の候補が集まりきらなくても、待ちすぎないようにする保険
+      setTimeout(resolve, 3000);
+    });
+  }
+
+  function encodeCode(obj) {
+    return btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
+  }
+
+  function decodeCode(code) {
+    return JSON.parse(decodeURIComponent(escape(atob(code.trim()))));
+  }
+
+  function setupDataChannel(channel) {
+    dc = channel;
+    dc.onopen = () => { if (onOpenCallback) onOpenCallback(); };
+    dc.onclose = () => { if (onCloseCallback) onCloseCallback(); };
+    dc.onmessage = (e) => {
+      if (!onMessageCallback) return;
+      try {
+        onMessageCallback(JSON.parse(e.data));
+      } catch (err) { /* 壊れたメッセージは無視 */ }
+    };
+  }
+
+  // ホスト側: 接続コード(オファー)を作成する
+  async function createHostOffer() {
+    pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    setupDataChannel(pc.createDataChannel('game', { ordered: true }));
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await waitIceComplete(pc);
+    return encodeCode({ type: pc.localDescription.type, sdp: pc.localDescription.sdp });
+  }
+
+  // ホスト側: ゲストから届いた返信コード(アンサー)を受け取って接続を完了する
+  async function acceptAnswer(code) {
+    const answer = decodeCode(code);
+    await pc.setRemoteDescription(new RTCSessionDescription(answer));
+  }
+
+  // ゲスト側: ホストのコード(オファー)から、返信コード(アンサー)を作成する
+  async function createGuestAnswer(hostCode) {
+    pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    pc.ondatachannel = (e) => setupDataChannel(e.channel);
+    const offer = decodeCode(hostCode);
+    await pc.setRemoteDescription(new RTCSessionDescription(offer));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await waitIceComplete(pc);
+    return encodeCode({ type: pc.localDescription.type, sdp: pc.localDescription.sdp });
+  }
+
+  function send(msg) {
+    if (dc && dc.readyState === 'open') {
+      try { dc.send(JSON.stringify(msg)); } catch (e) { /* 送信失敗は無視(次の更新で追いつく) */ }
+    }
+  }
+
+  function onMessage(cb) { onMessageCallback = cb; }
+  function onOpen(cb) { onOpenCallback = cb; }
+  function onClose(cb) { onCloseCallback = cb; }
+
+  function isConnected() {
+    return !!dc && dc.readyState === 'open';
+  }
+
+  function disconnect() {
+    if (dc) { try { dc.close(); } catch (e) { /* noop */ } dc = null; }
+    if (pc) { try { pc.close(); } catch (e) { /* noop */ } pc = null; }
+  }
+
+  return {
+    createHostOffer, acceptAnswer, createGuestAnswer,
+    send, onMessage, onOpen, onClose, isConnected, disconnect,
+  };
+})();
+
+
+/* ==================== js/pvp.js ==================== */
+// ============================================================
+// pvp.js
+// 対戦モード(2人)のロジック。ネットワーク越しに届く相手の状態を
+// 描画・補間し、命中判定・スコア・制限時間を管理する。
+// ダメージの適用は「撃った側が判定し、撃たれた側に伝えて、撃たれた側が
+// 自分のHPに反映する」という自己申告制(カジュアルな身内対戦向けの簡易実装)。
+// ============================================================
+
+const PvpSystem = (() => {
+  const MATCH_DURATION_SEC = 180; // 3分間のスコアアタック
+  const RESPAWN_INVULN_SEC = 2.0; // リスポーン直後の無敵時間
+
+  let scene = null;
+  let isHost = false;
+  let localScore = 0;
+  let remoteScore = 0;
+  let timeRemaining = MATCH_DURATION_SEC;
+  let matchActive = false;
+
+  let onHitReceived = null;      // (dmg, isHeadshot) => void  自分が撃たれた
+  let onDeathCredited = null;    // () => void                 相手を倒した(スコア加算)
+  let onOpponentDisconnected = null;
+  let onMatchEnd = null;
+
+  // ---- 相手キャラクターの描画(人間らしい配色のモデルを流用) ----
+  let avatar = null;
+  let headHitbox = null;
+  let bodyHitbox = null;
+  let targetPos = new THREE.Vector3();
+  let targetYaw = 0;
+  let remoteAlive = true;
+
+  function buildAvatar() {
+    const s = 1.0;
+    const group = new THREE.Group();
+    const skinMat = new THREE.MeshStandardMaterial({ color: 0xe0ac80, roughness: 0.8 });
+    const shirtMat = new THREE.MeshStandardMaterial({ color: 0xdd3333, roughness: 0.7 }); // 対戦相手カラー(赤)
+    const pantsMat = new THREE.MeshStandardMaterial({ color: 0x6a1a1a, roughness: 0.8 });
+    const bootMat = new THREE.MeshStandardMaterial({ color: 0x22201f, roughness: 0.7 });
+    const hairMat = new THREE.MeshStandardMaterial({ color: 0x2c2115, roughness: 0.8 });
+    const gunMat = new THREE.MeshStandardMaterial({ color: 0x262626, roughness: 0.5, metalness: 0.4 });
+
+    const legGeo = new THREE.BoxGeometry(0.14 * s, 0.38 * s, 0.15 * s);
+    const bootGeo = new THREE.BoxGeometry(0.15 * s, 0.12 * s, 0.19 * s);
+    const legL = new THREE.Mesh(legGeo, pantsMat);
+    legL.position.set(-0.12 * s, 0.31 * s, 0);
+    group.add(legL);
+    const bootL = new THREE.Mesh(bootGeo, bootMat);
+    bootL.position.set(-0.12 * s, 0.08 * s, 0.02 * s);
+    group.add(bootL);
+    const legR = new THREE.Mesh(legGeo, pantsMat);
+    legR.position.set(0.12 * s, 0.31 * s, 0);
+    group.add(legR);
+    const bootR = new THREE.Mesh(bootGeo, bootMat);
+    bootR.position.set(0.12 * s, 0.08 * s, 0.02 * s);
+    group.add(bootR);
+
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.34 * s, 0.42 * s, 0.2 * s), shirtMat);
+    torso.position.set(0, 0.73 * s, 0);
+    group.add(torso);
+
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.135 * s, 10, 8), skinMat);
+    head.position.set(0, 1.05 * s, 0);
+    group.add(head);
+    const hair = new THREE.Mesh(new THREE.SphereGeometry(0.14 * s, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.55), hairMat);
+    hair.position.set(0, 1.09 * s, 0);
+    group.add(hair);
+
+    const armGeo = new THREE.BoxGeometry(0.1 * s, 0.34 * s, 0.1 * s);
+    const armL = new THREE.Mesh(armGeo, shirtMat);
+    armL.position.set(-0.24 * s, 0.68 * s, 0);
+    armL.rotation.z = 0.2;
+    group.add(armL);
+    const armR = new THREE.Mesh(armGeo, shirtMat);
+    armR.position.set(0.2 * s, 0.84 * s, 0.14 * s);
+    armR.rotation.x = -1.15;
+    group.add(armR);
+
+    const gunGroup = new THREE.Group();
+    const gunBody = new THREE.Mesh(new THREE.BoxGeometry(0.08 * s, 0.08 * s, 0.5 * s), gunMat);
+    gunBody.position.set(0, 0, -0.22 * s);
+    gunGroup.add(gunBody);
+    gunGroup.position.set(0.2 * s, 0.56 * s, 0.36 * s);
+    group.add(gunGroup);
+
+    // 命中判定(頭部/胴体)
+    headHitbox = new THREE.Mesh(
+      new THREE.SphereGeometry(0.24 * s, 8, 8),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    headHitbox.position.y = 1.06 * s;
+    group.add(headHitbox);
+
+    bodyHitbox = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.3 * s, 0.5 * s, 4, 8),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    bodyHitbox.position.y = 0.5 * s;
+    group.add(bodyHitbox);
+
+    return group;
+  }
+
+  function init(threeScene, opts, callbacks) {
+    scene = threeScene;
+    isHost = opts.isHost;
+    onHitReceived = callbacks.onHitReceived;
+    onDeathCredited = callbacks.onDeathCredited;
+    onOpponentDisconnected = callbacks.onOpponentDisconnected;
+    onMatchEnd = callbacks.onMatchEnd;
+
+    if (avatar) scene.remove(avatar);
+    avatar = buildAvatar();
+    scene.add(avatar);
+
+    localScore = 0;
+    remoteScore = 0;
+    timeRemaining = MATCH_DURATION_SEC;
+    matchActive = true;
+    remoteAlive = true;
+
+    NetSystem.onMessage(handleMessage);
+    NetSystem.onClose(() => { if (onOpponentDisconnected) onOpponentDisconnected(); });
+  }
+
+  function handleMessage(msg) {
+    if (!msg || !msg.t) return;
+    switch (msg.t) {
+      case 'state':
+        targetPos.set(msg.x, 0, msg.z);
+        targetYaw = msg.yaw;
+        if (msg.alive !== remoteAlive) {
+          remoteAlive = msg.alive;
+          if (avatar) avatar.visible = remoteAlive;
+        }
+        break;
+      case 'hit':
+        if (onHitReceived) onHitReceived(msg.dmg, msg.isHeadshot);
+        break;
+      case 'death':
+        localScore += 1; // 相手が力尽きた = 自分のスコア加算
+        if (onDeathCredited) onDeathCredited();
+        break;
+      default:
+        break;
+    }
+  }
+
+  // ---- ネットワークへの送信(game.js側から呼ばれる) ----
+  function sendLocalState(pos, yawRad, alive) {
+    NetSystem.send({ t: 'state', x: pos.x, z: pos.z, yaw: yawRad, alive });
+  }
+
+  function reportHit(dmg, isHeadshot) {
+    NetSystem.send({ t: 'hit', dmg, isHeadshot });
+  }
+
+  function reportDeath() {
+    remoteScore += 1; // 自分が倒された = 相手のスコア加算(往復を待たず即座に反映)
+    NetSystem.send({ t: 'death' });
+  }
+
+  // ---- 命中判定(自分の射撃が相手キャラクターに当たったか) ----
+  function raycastHit(raycaster) {
+    if (!avatar || !avatar.visible) return null;
+    const targets = [headHitbox, bodyHitbox];
+    const intersects = raycaster.intersectObjects(targets, false);
+    if (intersects.length === 0) return null;
+    const isHeadshot = intersects[0].object === headHitbox;
+    return { isHeadshot, distance: intersects[0].distance };
+  }
+
+  function update(dt) {
+    if (avatar) {
+      // 受信した最新状態へ滑らかに補間する(ネットワークの間隔を埋める)
+      avatar.position.lerp(targetPos, Math.min(1, dt * 10));
+      let diff = targetYaw - avatar.rotation.y;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      avatar.rotation.y += diff * Math.min(1, dt * 10);
+    }
+
+    if (matchActive) {
+      timeRemaining -= dt;
+      if (timeRemaining <= 0) {
+        timeRemaining = 0;
+        matchActive = false;
+        if (onMatchEnd) onMatchEnd();
+      }
+    }
+  }
+
+  function getLocalScore() { return localScore; }
+  function getRemoteScore() { return remoteScore; }
+  function getTimeRemaining() { return timeRemaining; }
+  function getIsHost() { return isHost; }
+
+  function teardown() {
+    if (avatar && scene) scene.remove(avatar);
+    avatar = null;
+    matchActive = false;
+  }
+
+  return {
+    init, update, handleMessage,
+    sendLocalState, reportHit, reportDeath, raycastHit,
+    getLocalScore, getRemoteScore, getTimeRemaining, getIsHost,
+    teardown,
+  };
+})();
+
+
 /* ==================== js/game.js ==================== */
 // ============================================================
 // game.js
@@ -2158,9 +2780,9 @@ const AllyManager = (() => {
 // ============================================================
 
 (() => {
-  const PLAYER_SPEED = 4.6;      // 矢印キー/後退・横移動ボタンの基準速度 (units/sec)
-  const RUN_SPEED_MIN = 3.2;     // 足踏みが弱いときの前進速度
-  const RUN_SPEED_MAX = 6.8;     // 足踏みが激しいときの前進速度
+  const PLAYER_SPEED = 5.6;      // 矢印キー/後退・横移動ボタンの基準速度 (units/sec)
+  const RUN_SPEED_MIN = 4.0;     // 足踏みが弱いときの前進速度
+  const RUN_SPEED_MAX = 8.2;     // 足踏みが激しいときの前進速度
   const PLAYER_RADIUS = 0.35;    // 衝突判定用の簡易半径
   const EYE_HEIGHT = 1.65;
   const WALL_HEIGHT = 3.2;
@@ -2177,8 +2799,10 @@ const AllyManager = (() => {
     btnRetry: document.getElementById('btn-retry'),
     btnFire: document.getElementById('btn-fire'),
     btnStrafeLeft: document.getElementById('btn-strafe-left'),
-    btnBack: document.getElementById('btn-back'),
+    btnReload: document.getElementById('btn-reload'),
     btnStrafeRight: document.getElementById('btn-strafe-right'),
+    ammoDisplay: document.getElementById('ammo-display'),
+    ammoValue: document.getElementById('ammo-value'),
     btnRestartOver: document.getElementById('btn-restart-over'),
     btnRestartClear: document.getElementById('btn-restart-clear'),
     hpFill: document.getElementById('hp-bar-fill'),
@@ -2192,14 +2816,43 @@ const AllyManager = (() => {
     modeCards: document.querySelectorAll('.mode-card'),
     hudMates: document.getElementById('hud-mates'),
     matesValue: document.getElementById('mates-value'),
+    hudTopRight: document.querySelector('.hud-top-right'),
     canvasContainer: document.getElementById('canvas-container'),
     gameoverStats: document.getElementById('gameover-stats'),
     clearStats: document.getElementById('clear-stats'),
+    // 対戦モード(2人)
+    pvpConnect: document.getElementById('screen-pvp-connect'),
+    pvpResult: document.getElementById('screen-pvp-result'),
+    pvpRoleSelect: document.getElementById('pvp-role-select'),
+    pvpHostFlow: document.getElementById('pvp-host-flow'),
+    pvpGuestFlow: document.getElementById('pvp-guest-flow'),
+    btnPvpHost: document.getElementById('btn-pvp-host'),
+    btnPvpJoin: document.getElementById('btn-pvp-join'),
+    btnPvpBack: document.getElementById('btn-pvp-back'),
+    pvpHostCode: document.getElementById('pvp-host-code'),
+    btnPvpCopyHost: document.getElementById('btn-pvp-copy-host'),
+    pvpHostPaste: document.getElementById('pvp-host-paste'),
+    btnPvpConnectHost: document.getElementById('btn-pvp-connect-host'),
+    pvpHostStatus: document.getElementById('pvp-host-status'),
+    pvpGuestPaste: document.getElementById('pvp-guest-paste'),
+    btnPvpMakeAnswer: document.getElementById('btn-pvp-make-answer'),
+    pvpGuestStep2: document.getElementById('pvp-guest-step2'),
+    pvpGuestCode: document.getElementById('pvp-guest-code'),
+    btnPvpCopyGuest: document.getElementById('btn-pvp-copy-guest'),
+    pvpGuestStatus: document.getElementById('pvp-guest-status'),
+    hudPvpScore: document.getElementById('hud-pvp-score'),
+    pvpScoreValue: document.getElementById('pvp-score-value'),
+    pvpTimerValue: document.getElementById('pvp-timer-value'),
+    pvpRespawnOverlay: document.getElementById('pvp-respawn-overlay'),
+    pvpRespawnTimer: document.getElementById('pvp-respawn-timer'),
+    pvpResultTitle: document.getElementById('pvp-result-title'),
+    pvpResultStats: document.getElementById('pvp-result-stats'),
+    btnRestartPvp: document.getElementById('btn-restart-pvp'),
   };
 
   let selectedWeapon = 'ak';
   let selectedDifficulty = 'normal';
-  let selectedMode = 'solo'; // 'solo' | 'team'
+  let selectedMode = 'solo'; // 'solo' | 'team' | 'pvp'
   let gameState = 'title'; // title | playing | gameover | clear
   let sceneBuilt = false;
 
@@ -2214,6 +2867,13 @@ const AllyManager = (() => {
   let playerPos = new THREE.Vector3();
   let playerHP = PLAYER_MAX_HP;
   let lastFireTime = 0;
+  let wasReloading = false;    // リロード開始の瞬間を検知するためのフラグ
+  let lastFootstepCount = 0;   // 足音再生のトリガー検知用
+  // 対戦モード(2人)用
+  let pvpIsHost = false;
+  let pvpRespawning = false;
+  let pvpRespawnTimer = 0;
+  let lastPvpSendTime = 0;
   let startTime = 0;
 
   // ---- 振動フィードバック(Vibration API) ----
@@ -2266,6 +2926,9 @@ const AllyManager = (() => {
       el.modeCards.forEach(c => c.classList.remove('selected'));
       card.classList.add('selected');
       selectedMode = card.dataset.mode;
+      // 対戦モード(2人)にはAIの難易度設定が無関係なので隠す
+      const diffSelect = document.getElementById('difficulty-select');
+      if (diffSelect) diffSelect.classList.toggle('hidden', selectedMode === 'pvp');
     });
   });
 
@@ -2682,7 +3345,7 @@ const AllyManager = (() => {
 
   // ---- 弾痕デカール ----
   function spawnBulletHole(point, normal) {
-    const geo = new THREE.CircleGeometry(0.09, 12);
+    const geo = new THREE.CircleGeometry(0.045, 12);
     const mat = new THREE.MeshBasicMaterial({
       color: 0x18120e, transparent: true, opacity: 0.85,
       depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
@@ -2696,7 +3359,7 @@ const AllyManager = (() => {
       color: 0x2a221a, transparent: true, opacity: 0.35, depthWrite: false,
       polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3,
     });
-    const scorch = new THREE.Mesh(new THREE.CircleGeometry(0.19, 10), scorchMat);
+    const scorch = new THREE.Mesh(new THREE.CircleGeometry(0.095, 10), scorchMat);
     scorch.position.copy(point).addScaledVector(normal, 0.01);
     scorch.quaternion.copy(quat);
 
@@ -2735,6 +3398,8 @@ const AllyManager = (() => {
     const now = performance.now();
     const cooldown = WeaponSystem.getCooldownMs();
     if (now - lastFireTime < cooldown) return;
+    if (WeaponSystem.getIsReloading()) return; // リロード中は発射できない
+    if (!WeaponSystem.tryConsumeAmmo()) return; // 弾切れ(自動的にリロードが始まる)
     lastFireTime = now;
 
     WeaponSystem.triggerRecoil();
@@ -2745,7 +3410,12 @@ const AllyManager = (() => {
     raycaster.setFromCamera({ x: 0, y: 0 }, camera);
 
     const hit = EnemyManager.raycastHit(raycaster);
-    const hitDist = hit ? camera.position.distanceTo(hit.enemy.pos) : Infinity;
+    const enemyDist = hit ? camera.position.distanceTo(hit.enemy.pos) : Infinity;
+
+    const pvpHit = (selectedMode === 'pvp') ? PvpSystem.raycastHit(raycaster) : null;
+    const pvpDist = pvpHit ? pvpHit.distance : Infinity;
+
+    const hitDist = Math.min(enemyDist, pvpDist);
 
     // 壁・クレート(遮蔽物)への着弾距離を調べる(手前にあれば弾を遮る)
     let wallHit = null;
@@ -2765,7 +3435,11 @@ const AllyManager = (() => {
       return;
     }
 
-    if (hit) {
+    if (pvpHit && pvpDist <= enemyDist) {
+      // 対戦モード: 相手プレイヤーに命中を報告する(ダメージの適用は相手側が行う)
+      PvpSystem.reportHit(WeaponSystem.getDamage(), pvpHit.isHeadshot);
+      showKillMessage(pvpHit.isHeadshot ? 'ヘッドショット!' : 'ヒット!', pvpHit.isHeadshot);
+    } else if (hit) {
       EnemyManager.damageEnemy(hit.enemy, WeaponSystem.getDamage(), hit.isHeadshot);
     }
   }
@@ -2789,8 +3463,15 @@ const AllyManager = (() => {
     btnEl.addEventListener('mouseleave', release);
   }
   bindHoldButton(el.btnStrafeLeft, 'left');
-  bindHoldButton(el.btnBack, 'back');
   bindHoldButton(el.btnStrafeRight, 'right');
+
+  // ---- リロードボタン(弾が残っていてもいつでも押せる) ----
+  function tryReload() {
+    if (gameState !== 'playing') return;
+    WeaponSystem.startReload();
+  }
+  el.btnReload.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); tryReload(); }, { passive: false });
+  el.btnReload.addEventListener('mousedown', (e) => { e.stopPropagation(); tryReload(); });
 
   // ---- プレイヤー被弾・敵撃破コールバック ----
   function onPlayerDamage(dmg) {
@@ -2846,9 +3527,31 @@ const AllyManager = (() => {
     el.enemyCount.textContent = EnemyManager.getAliveCount();
   }
 
+  function updateAmmoHud() {
+    const reloading = WeaponSystem.getIsReloading();
+    if (reloading && !wasReloading) {
+      AudioSystem.playReload(); // リロード開始(自動・手動どちらでも)
+    }
+    wasReloading = reloading;
+
+    if (reloading) {
+      const pct = Math.round(WeaponSystem.getReloadProgress() * 100);
+      el.ammoValue.textContent = `RELOAD ${pct}%`;
+      el.ammoDisplay.classList.add('reloading');
+      el.ammoDisplay.classList.remove('low');
+    } else {
+      const ammo = WeaponSystem.getAmmo();
+      const mag = WeaponSystem.getMagSize();
+      el.ammoValue.textContent = `${ammo}/${mag}`;
+      el.ammoDisplay.classList.remove('reloading');
+      el.ammoDisplay.classList.toggle('low', ammo <= 3);
+    }
+  }
+
   // ---- 画面遷移 ----
   function showScreen(target) {
-    [el.title, el.permError, el.hud, el.gameover, el.clear].forEach(s => s.classList.add('hidden'));
+    [el.title, el.permError, el.hud, el.gameover, el.clear, el.pvpConnect, el.pvpResult]
+      .forEach(s => s.classList.add('hidden'));
     if (target) target.classList.remove('hidden');
   }
 
@@ -2874,6 +3577,11 @@ const AllyManager = (() => {
 
   function backToTitle() {
     gameState = 'title';
+    NetSystem.disconnect();
+    el.hudTopRight.classList.remove('hidden');
+    el.hudPvpScore.classList.add('hidden');
+    el.pvpRespawnOverlay.classList.add('hidden');
+    pvpRespawning = false;
     showScreen(el.title);
   }
 
@@ -2895,6 +3603,13 @@ const AllyManager = (() => {
 
     if (!sceneBuilt) buildScene();
 
+    if (selectedMode === 'pvp') {
+      // 対戦モード: 敵・味方の初期化はせず、先に接続画面へ進む
+      resetPvpConnectUI();
+      showScreen(el.pvpConnect);
+      return;
+    }
+
     // 前回プレイの弾痕をクリア
     bulletHoles.forEach(bh => { scene.remove(bh.mesh); scene.remove(bh.scorch); });
     bulletHoles = [];
@@ -2908,6 +3623,9 @@ const AllyManager = (() => {
 
     // 武器セット
     WeaponSystem.setWeapon(selectedWeapon);
+    wasReloading = false;
+    lastFootstepCount = 0;
+    updateAmmoHud();
 
     if (selectedMode === 'team') {
       // チーム戦: 敵チーム5体 + 味方AI4体
@@ -2952,6 +3670,189 @@ const AllyManager = (() => {
   el.btnRetry.addEventListener('click', startGame);
   el.btnRestartOver.addEventListener('click', backToTitle);
   el.btnRestartClear.addEventListener('click', backToTitle);
+
+  // ==================== 対戦モード(2人) ====================
+
+  function copyToClipboard(textarea) {
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, 999999);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(textarea.value).catch(() => { /* コピー失敗時は選択状態のままにしておく */ });
+    } else {
+      try { document.execCommand('copy'); } catch (e) { /* noop */ }
+    }
+  }
+
+  function resetPvpConnectUI() {
+    NetSystem.disconnect();
+    el.pvpRoleSelect.classList.remove('hidden');
+    el.pvpHostFlow.classList.add('hidden');
+    el.pvpGuestFlow.classList.add('hidden');
+    el.pvpHostCode.value = '';
+    el.pvpHostPaste.value = '';
+    el.pvpHostStatus.textContent = '';
+    el.pvpGuestPaste.value = '';
+    el.pvpGuestCode.value = '';
+    el.pvpGuestStep2.classList.add('hidden');
+    el.pvpGuestStatus.textContent = '';
+  }
+
+  el.btnPvpBack.addEventListener('click', () => {
+    NetSystem.disconnect();
+    backToTitle();
+  });
+
+  el.btnPvpHost.addEventListener('click', async () => {
+    el.pvpRoleSelect.classList.add('hidden');
+    el.pvpHostFlow.classList.remove('hidden');
+    el.pvpHostStatus.textContent = 'コードを作成中…';
+    try {
+      const code = await NetSystem.createHostOffer();
+      el.pvpHostCode.value = code;
+      el.pvpHostStatus.textContent = '① のコードを相手に送り、② に相手からの返信コードを貼り付けてください';
+      NetSystem.onOpen(() => startPvpMatch(true));
+    } catch (e) {
+      el.pvpHostStatus.textContent = '接続コードの作成に失敗しました。ページを再読み込みして試してください。';
+    }
+  });
+
+  el.btnPvpCopyHost.addEventListener('click', () => copyToClipboard(el.pvpHostCode));
+
+  el.btnPvpConnectHost.addEventListener('click', async () => {
+    const code = el.pvpHostPaste.value.trim();
+    if (!code) return;
+    el.pvpHostStatus.textContent = '接続しています…';
+    try {
+      await NetSystem.acceptAnswer(code);
+    } catch (e) {
+      el.pvpHostStatus.textContent = 'コードが正しくないようです。もう一度貼り付けてください。';
+    }
+  });
+
+  el.btnPvpJoin.addEventListener('click', () => {
+    el.pvpRoleSelect.classList.add('hidden');
+    el.pvpGuestFlow.classList.remove('hidden');
+  });
+
+  el.btnPvpMakeAnswer.addEventListener('click', async () => {
+    const hostCode = el.pvpGuestPaste.value.trim();
+    if (!hostCode) return;
+    el.pvpGuestStatus.textContent = 'コードを作成中…';
+    try {
+      const code = await NetSystem.createGuestAnswer(hostCode);
+      el.pvpGuestCode.value = code;
+      el.pvpGuestStep2.classList.remove('hidden');
+      el.pvpGuestStatus.textContent = '② のコードをホストに送り返し、接続を待っています…';
+      NetSystem.onOpen(() => startPvpMatch(false));
+    } catch (e) {
+      el.pvpGuestStatus.textContent = 'コードが正しくないようです。もう一度貼り付けてください。';
+    }
+  });
+
+  el.btnPvpCopyGuest.addEventListener('click', () => copyToClipboard(el.pvpGuestCode));
+
+  el.btnRestartPvp.addEventListener('click', () => {
+    NetSystem.disconnect();
+    backToTitle();
+  });
+
+  // 接続が確立した瞬間に呼ばれ、実際の試合を開始する
+  async function startPvpMatch(isHostFlag) {
+    pvpIsHost = isHostFlag;
+
+    bulletHoles.forEach(bh => { scene.remove(bh.mesh); scene.remove(bh.scorch); });
+    bulletHoles = [];
+
+    const spawnGrid = isHostFlag ? PVP_SPAWN_HOST : PVP_SPAWN_GUEST;
+    const startWorld = gridToWorld(spawnGrid.gx, spawnGrid.gy);
+    playerPos.set(startWorld.x, 0, startWorld.z);
+    camera.position.set(playerPos.x, EYE_HEIGHT, playerPos.z);
+    playerHP = PLAYER_MAX_HP;
+    updateHpHud();
+
+    WeaponSystem.setWeapon(selectedWeapon);
+    wasReloading = false;
+    lastFootstepCount = 0;
+    updateAmmoHud();
+
+    // 対戦モードではAIの敵・味方は出さない
+    EnemyManager.init(scene, [], {
+      onPlayerDamage: () => {}, onEnemyKilled: () => {},
+      getPlayerPos: () => playerPos, getPlayerGrid: () => worldToGrid(playerPos.x, playerPos.z),
+    }, 'normal');
+    AllyManager.init(scene, [], { getPlayerPos: () => playerPos });
+    el.hudMates.classList.add('hidden');
+    el.hudTopRight.classList.add('hidden'); // 「残り敵」表示は対戦モードでは使わない
+    el.hudPvpScore.classList.remove('hidden');
+    el.pvpRespawnOverlay.classList.add('hidden');
+    pvpRespawning = false;
+
+    PvpSystem.init(scene, { isHost: pvpIsHost }, {
+      onHitReceived: onPvpHitReceived,
+      onDeathCredited: updatePvpScoreHud,
+      onOpponentDisconnected: onPvpOpponentDisconnected,
+      onMatchEnd: endPvpMatch,
+    });
+
+    await SensorSystem.waitForFirstOrientation();
+    SensorSystem.calibrate();
+
+    startTime = performance.now();
+    gameState = 'playing';
+    showScreen(el.hud);
+    updatePvpScoreHud();
+  }
+
+  function onPvpHitReceived(dmg, isHeadshot) {
+    if (gameState !== 'playing' || pvpRespawning) return; // リスポーン直後は無敵
+    const actualDmg = isHeadshot ? playerHP : dmg; // ヘッドショットは確実に倒す
+    playerHP = Math.max(0, playerHP - actualDmg);
+    updateHpHud();
+    AudioSystem.playHurt();
+    vibrate(90);
+    el.damageFlash.classList.remove('active');
+    void el.damageFlash.offsetWidth;
+    el.damageFlash.classList.add('active');
+    if (playerHP <= 0) pvpDie();
+  }
+
+  function pvpDie() {
+    pvpRespawning = true;
+    pvpRespawnTimer = 3;
+    PvpSystem.reportDeath();
+    updatePvpScoreHud();
+    el.pvpRespawnOverlay.classList.remove('hidden');
+    el.pvpRespawnTimer.textContent = '3';
+  }
+
+  function updatePvpScoreHud() {
+    el.pvpScoreValue.textContent = `${PvpSystem.getLocalScore()} - ${PvpSystem.getRemoteScore()}`;
+    const t = Math.max(0, Math.ceil(PvpSystem.getTimeRemaining()));
+    const mm = Math.floor(t / 60), ss = t % 60;
+    el.pvpTimerValue.textContent = `${mm}:${ss.toString().padStart(2, '0')}`;
+  }
+
+  function endPvpMatch() {
+    if (gameState !== 'playing') return;
+    gameState = 'gameover'; // アニメーションループの更新を止めるための状態遷移
+    const local = PvpSystem.getLocalScore();
+    const remote = PvpSystem.getRemoteScore();
+    el.pvpResultTitle.textContent = local > remote ? 'WIN' : (local < remote ? 'LOSE' : 'DRAW');
+    el.pvpResultTitle.style.color = local >= remote ? 'var(--safe-green)' : 'var(--danger)';
+    el.pvpResultStats.textContent = `スコア: ${local} - ${remote}`;
+    showScreen(el.pvpResult);
+    NetSystem.disconnect();
+  }
+
+  function onPvpOpponentDisconnected() {
+    if (gameState !== 'playing') return;
+    gameState = 'gameover';
+    el.pvpResultTitle.textContent = '接続が切れました';
+    el.pvpResultTitle.style.color = 'var(--danger)';
+    el.pvpResultStats.textContent = `最終スコア: ${PvpSystem.getLocalScore()} - ${PvpSystem.getRemoteScore()}`;
+    showScreen(el.pvpResult);
+  }
 
   // ---- メインループ ----
   function animate() {
@@ -3001,11 +3902,46 @@ const AllyManager = (() => {
       }
       camera.position.set(playerPos.x, EYE_HEIGHT, playerPos.z);
 
+      // 足踏みが確定するたびに足音を鳴らす
+      if (SensorSystem.state.footstepCount !== lastFootstepCount) {
+        lastFootstepCount = SensorSystem.state.footstepCount;
+        AudioSystem.playFootstep();
+      }
+
       WeaponSystem.update(dt);
+      updateAmmoHud();
       EnemyManager.update(dt);
       if (selectedMode === 'team') {
         AllyManager.update(dt);
         updateMatesHud();
+      }
+      if (selectedMode === 'pvp') {
+        PvpSystem.update(dt);
+        updatePvpScoreHud();
+
+        // リスポーン処理
+        if (pvpRespawning) {
+          pvpRespawnTimer -= dt;
+          el.pvpRespawnTimer.textContent = Math.max(0, Math.ceil(pvpRespawnTimer));
+          if (pvpRespawnTimer <= 0) {
+            pvpRespawning = false;
+            el.pvpRespawnOverlay.classList.add('hidden');
+            const spawnGrid = pvpIsHost ? PVP_SPAWN_HOST : PVP_SPAWN_GUEST;
+            const w = gridToWorld(spawnGrid.gx, spawnGrid.gy);
+            playerPos.set(w.x, 0, w.z);
+            camera.position.set(playerPos.x, EYE_HEIGHT, playerPos.z);
+            playerHP = PLAYER_MAX_HP;
+            updateHpHud();
+          }
+        }
+
+        // 自分の状態を一定間隔で相手に送信する
+        const nowMs = performance.now();
+        if (nowMs - lastPvpSendTime > 80) {
+          lastPvpSendTime = nowMs;
+          const yawRad = Math.atan2(SensorSystem.state.forward.x, SensorSystem.state.forward.z);
+          PvpSystem.sendLocalState(playerPos, yawRad, !pvpRespawning);
+        }
       }
       updateBulletHoles();
       renderMinimap();
