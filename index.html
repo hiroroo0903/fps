@@ -1074,7 +1074,16 @@ const SensorSystem = (() => {
   }
 
   function computeDeviceQuaternion(event) {
-    const orient = THREE.MathUtils.degToRad(screenOrientationAngle());
+    // このゲームは縦画面(portrait-primary)専用で、横向きの場合は警告画面を表示して
+    // プレイさせない仕様になっている。にもかかわらずscreen.orientation.angle /
+    // window.orientationを毎回読み取っていたが、これらの値はOSが実際に画面回転を
+    // 検出したタイミングでしか更新されないため、ページ読み込み時の端末の置き方
+    // (平らに置いていた等)によっては90度や-90度に「固定」されたままになることがある。
+    // この状態だと、ここでの角度補正がまるごと90度ズレてしまい、
+    // 「右を向くとカメラが下を向く」「上に傾けるとカメラが左に動く」といった
+    // 上下・左右の反応が入れ替わる症状が発生する(数値検証で再現・確認済み)。
+    // 縦画面専用である以上、動的に読み取る意味がないため常に0として扱う。
+    const orient = 0;
 
     // alpha(方位角)は端末を縦に構えた姿勢(beta≈90°付近)で不安定になることがある(iOSの既知の問題)。
     // iOS Safariが提供するwebkitCompassHeadingはこの影響を受けにくいため、利用可能ならこちらを優先する。
