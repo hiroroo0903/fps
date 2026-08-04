@@ -512,8 +512,59 @@ html, body {
   .strafe-reload { --strafe-size: 2.4rem; }
 }
 
+/* スコープ(覗き撃ち) */
+.scope-button {
+  position: absolute; right: 1.5rem; bottom: 6.1rem;
+  width: 3.6rem; height: 3.6rem;
+  border-radius: 50%;
+  background: rgba(219, 228, 214, 0.14);
+  border: 2px solid var(--text-dim);
+  color: var(--text-main);
+  font-size: 0.62rem; letter-spacing: 0.05rem;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.1rem;
+  pointer-events: auto;
+  touch-action: none;
+}
+.scope-button .scope-icon { font-size: 1.15rem; line-height: 1; }
+.scope-button.on { background: rgba(255, 176, 32, 0.3); border-color: var(--accent); color: var(--accent); }
+.scope-button::after { content: ''; position: absolute; inset: -0.3rem; border-radius: 50%; }
+
+/* 覗いているときの視界(周囲を暗くした円形のスコープ像) */
+.scope-overlay { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.12s linear; }
+.scope-overlay.on { opacity: 1; }
+.scope-overlay .scope-mask {
+  position: absolute; inset: 0;
+  background: radial-gradient(circle at 50% 50%,
+    rgba(0,0,0,0) 0, rgba(0,0,0,0) 33%, rgba(0,0,0,0.55) 35%, rgba(0,0,0,0.97) 42%, #000 60%);
+}
+.scope-overlay .scope-ring {
+  position: absolute; left: 50%; top: 50%; width: 66vmin; height: 66vmin;
+  transform: translate(-50%, -50%); border-radius: 50%;
+  border: 2px solid rgba(20,24,20,0.9);
+  box-shadow: inset 0 0 3rem rgba(0,0,0,0.55);
+}
+.scope-overlay .scope-line {
+  position: absolute; left: 50%; top: 50%; background: rgba(20,24,20,0.85);
+}
+.scope-overlay .scope-line.h { width: 66vmin; height: 1px; transform: translate(-50%, -50%); }
+.scope-overlay .scope-line.v { width: 1px; height: 66vmin; transform: translate(-50%, -50%); }
+.scope-overlay .scope-reticle {
+  position: absolute; left: 50%; top: 50%; width: 1.6rem; height: 1.6rem;
+  transform: translate(-50%, -50%);
+}
+.scope-overlay .scope-reticle::before,
+.scope-overlay .scope-reticle::after {
+  content: ''; position: absolute; background: var(--danger);
+}
+.scope-overlay .scope-reticle::before { left: 50%; top: 0; width: 1px; height: 100%; margin-left: -0.5px; }
+.scope-overlay .scope-reticle::after { top: 50%; left: 0; height: 1px; width: 100%; margin-top: -0.5px; }
+.scope-overlay .scope-tick {
+  position: absolute; left: 50%; top: 50%; width: 1px; height: 0.5rem;
+  background: rgba(20,24,20,0.85); transform-origin: 50% 0;
+}
+
 .ammo-display {
-  position: absolute; right: 1.1rem; bottom: 6.2rem;
+  position: absolute; right: 1.1rem; bottom: 10.4rem;
   background: rgba(10, 14, 10, 0.55);
   border: 1px solid var(--panel-line);
   color: var(--text-main);
@@ -615,6 +666,10 @@ html, body {
       <span class="mode-name">RIG</span>
       <span class="mode-desc">掘削リグ。中央やぐらの小さな闘技場</span>
     </button>
+    <button class="mode-card" data-stage="hotel">
+      <span class="mode-name">HOTEL 3F</span>
+      <span class="mode-desc">ホテル3階。客室・ロビー・メザニンの屋内戦</span>
+    </button>
   </div>
 
   <div id="difficulty-select" class="difficulty-select">
@@ -636,6 +691,7 @@ html, body {
     <p>⌨️ 矢印キー/WASD → 移動(PCでの操作用)</p>
     <p>📱 端末の向き → 視点</p>
     <p>👆 画面をタップ → 発射</p>
+    <p>◎ 右下のスコープ → 覗いて遠くの敵を狙う(移動は遅くなる)</p>
   </div>
 
   <button id="btn-start" class="btn-primary">スタート</button>
@@ -806,6 +862,14 @@ html, body {
 
   <canvas id="minimap" class="minimap" width="130" height="130"></canvas>
 
+  <div id="scope-overlay" class="scope-overlay">
+    <div class="scope-mask"></div>
+    <div class="scope-ring"></div>
+    <div class="scope-line h"></div>
+    <div class="scope-line v"></div>
+    <div class="scope-reticle"></div>
+  </div>
+
   <div id="damage-flash" class="damage-flash"></div>
   <div id="kill-message" class="kill-message"></div>
 
@@ -816,6 +880,10 @@ html, body {
   <button id="btn-strafe-left" class="strafe-button strafe-left" aria-label="左に移動">◀</button>
   <button id="btn-reload" class="strafe-button strafe-reload" aria-label="リロード">⟳</button>
   <button id="btn-strafe-right" class="strafe-button strafe-right" aria-label="右に移動">▶</button>
+
+  <button id="btn-scope" class="scope-button" aria-label="スコープで覗く">
+    <span class="scope-icon">◎</span><span>スコープ</span>
+  </button>
 
   <button id="btn-fire" class="fire-button" aria-label="発射">FIRE</button>
 </div>
@@ -1031,6 +1099,158 @@ const STAGE_DEFS = {
       { type: 'scout',    gx: 4, gy: 2 },
       { type: 'heavy',    gx: 2, gy: 4 },
       { type: 'marksman', gx: 6, gy: 5 },
+    ],
+  },
+
+  // ============================================================
+  // ステージ3「HOTEL 3F」: ホテルの3階フロア。対戦(1対1)向けの屋内ステージ。
+  // 受付のあるロビー、吹き抜けを見下ろすメザニン(階段付き)、客室7室、
+  // 宴会場、エレベーターホール、サービス通路で構成する。
+  // 天井があるので空は見えず、屋内の照明で明るさを作る。
+  // ============================================================
+  hotel: {
+    name: 'HOTEL 3F(ホテル3階)',
+    desc: '客室・ロビー・メザニンのある屋内フロア。1対1の撃ち合い向き',
+    gridSize: 26,
+    theme: {
+      indoor: true,
+      wallHeight: 4.8,          // 天井の高さ。メザニンに立っても頭がつかえない高さにする
+      floor: { base: '#7a4a52', alt: '#6b414a', line: '#c8a96a', grime: 'rgba(30,15,20,0.10)' },
+      wall:  { base: '#d9cfba', panel: '#b9a887', trim: '#6b5540' },
+      wallStyle: 'interior',    // 腰壁+モールディングの内装クロス
+      wallDecor: true,          // 壁に絵画とブラケット照明を掛ける
+      skyTop: 0x2a2228, skyBottom: 0x1b1519,
+      fog: 0x241c20, fogNear: 14, fogFar: 70,
+      parapetColor: 0x8a7a60,
+      light: { ambient: 0.85, hemiSky: 0xffe6c4, hemiGround: 0x4a3038, hemi: 0.75,
+               sun: 0xffe2b8, sunIntensity: 0.45, background: 0x1b1519 },
+    },
+    rooms: [
+      { id: 'R1', x: 3,  y: 2,  w: 4,  h: 4,  name: '客室301' },
+      { id: 'R2', x: 8,  y: 2,  w: 4,  h: 4,  name: '客室302' },
+      { id: 'R3', x: 13, y: 2,  w: 3,  h: 4,  name: '客室303' },
+      { id: 'C1', x: 2,  y: 7,  w: 14, h: 2,  name: '北の廊下' },
+      { id: 'R4', x: 2,  y: 10, w: 5,  h: 4,  name: '客室304' },
+      { id: 'R5', x: 8,  y: 10, w: 4,  h: 4,  name: '客室305' },
+      { id: 'L',  x: 16, y: 2,  w: 8,  h: 10, name: 'ロビー(受付)' },
+      { id: 'E',  x: 16, y: 12, w: 4,  h: 5,  name: 'エレベーターホール' },
+      { id: 'C2', x: 2,  y: 15, w: 14, h: 2,  name: '南の廊下' },
+      { id: 'R6', x: 2,  y: 18, w: 5,  h: 5,  name: '客室306' },
+      { id: 'R7', x: 9,  y: 18, w: 5,  h: 5,  name: '客室307' },
+      { id: 'B',  x: 20, y: 13, w: 4,  h: 10, name: '宴会場' },
+      { id: 'C3', x: 14, y: 21, w: 6,  h: 2,  name: 'サービス通路' },
+      { id: 'ST', x: 15, y: 18, w: 4,  h: 3,  name: '倉庫(リネン庫)' },
+    ],
+    // 客室のドア(1マスの開口)
+    corridors: [
+      { x: 4,  y: 6,  w: 1, h: 1 },
+      { x: 9,  y: 6,  w: 1, h: 1 },
+      { x: 14, y: 6,  w: 1, h: 1 },
+      { x: 4,  y: 9,  w: 1, h: 1 },
+      { x: 9,  y: 9,  w: 1, h: 1 },
+      { x: 4,  y: 14, w: 1, h: 1 },
+      { x: 10, y: 14, w: 1, h: 1 },
+      { x: 4,  y: 17, w: 1, h: 1 },
+      { x: 10, y: 17, w: 1, h: 1 },
+    ],
+    ducts: [],
+    elevated: [
+      { x: 20, y: 2,  w: 4, h: 3 }, // 吹き抜けを見下ろすメザニン
+      { x: 17, y: 3,  w: 3, h: 2 }, // メザニンへの階段
+      { x: 16, y: 9,  w: 3, h: 2 }, // ロビーの一段高いラウンジ席
+      { x: 16, y: 11, w: 3, h: 1 }, // ラウンジへのスロープ
+    ],
+    heightZones: [
+      { id: 'mezzanine', type: 'flat', gx0: 20, gy0: 2, gx1: 23, gy1: 4, height: 2.2,
+        support: 'facade', railHeight: 1.0, railStyle: 'baluster', openSides: ['south'] },
+      { id: 'mezzStair', type: 'ramp', axis: 'x', gx0: 17, gy0: 3, gx1: 19, gy1: 4,
+        h0: 0, h1: 2.2, style: 'stairs' },
+      { id: 'lounge',    type: 'flat', gx0: 16, gy0: 9, gx1: 18, gy1: 10, height: 0.7,
+        support: 'facade', railHeight: 0.45 },
+      { id: 'loungeRamp', type: 'ramp', axis: 'y', gx0: 16, gy0: 11, gx1: 18, gy1: 11,
+        h0: 0.7, h1: 0, style: 'openTread' },
+    ],
+    // 間仕切り。開口部を絞って曲がり角を作る
+    wallBlocks: [
+      { gx: 18, gy: 12 }, { gx: 19, gy: 12 }, // ロビーとエレベーターホールの間仕切り
+      { gx: 20, gy: 15 }, { gx: 20, gy: 16 }, // エレベーターホールと宴会場の間仕切り
+      { gx: 19, gy: 21 },                     // サービス通路の曲がり角
+      { gx: 11, gy: 7 },                      // 北の廊下の柱型
+      { gx: 7,  gy: 16 },                     // 南の廊下の柱型
+      { gx: 22, gy: 18 },                     // 宴会場の間仕切り
+    ],
+    // 家具・調度品
+    obstacles: [
+      // ロビー: 受付カウンターとソファ、観葉植物
+      { gx: 17, gy: 6, kind: 'counter' }, { gx: 18, gy: 6, kind: 'counter' },
+      { gx: 21, gy: 8, kind: 'sofa' },    { gx: 22, gy: 10, kind: 'sofa' },
+      { gx: 16, gy: 2, kind: 'plant' },   { gx: 19, gy: 11, kind: 'plant' },
+      { gx: 23, gy: 6, kind: 'plant' },
+      // 客室: ベッドとワードローブ
+      { gx: 3,  gy: 3, kind: 'bed' },     { gx: 6,  gy: 2, kind: 'wardrobe' },
+      { gx: 8,  gy: 3, kind: 'bed' },     { gx: 11, gy: 2, kind: 'wardrobe' },
+      { gx: 13, gy: 3, kind: 'bed' },
+      { gx: 3,  gy: 11, kind: 'bed' },    { gx: 6,  gy: 10, kind: 'wardrobe' },
+      { gx: 9,  gy: 11, kind: 'bed' },
+      { gx: 3,  gy: 19, kind: 'bed' },    { gx: 6,  gy: 18, kind: 'wardrobe' },
+      { gx: 10, gy: 19, kind: 'bed' },    { gx: 13, gy: 18, kind: 'wardrobe' },
+      // 客室のデスクと冷蔵庫(ミニバー)
+      { gx: 5,  gy: 5,  kind: 'desk' },   { gx: 10, gy: 5,  kind: 'desk' },
+      { gx: 5,  gy: 13, kind: 'desk' },   { gx: 5,  gy: 22, kind: 'desk' },
+      { gx: 12, gy: 22, kind: 'desk' },
+      { gx: 3,  gy: 2,  kind: 'fridge' }, { gx: 8,  gy: 2,  kind: 'fridge' },
+      { gx: 2,  gy: 10, kind: 'fridge' }, { gx: 2,  gy: 18, kind: 'fridge' },
+      { gx: 9,  gy: 18, kind: 'fridge' },
+      // 倉庫(リネン庫)のスチール棚
+      { gx: 15, gy: 18, kind: 'shelf' },  { gx: 17, gy: 18, kind: 'shelf' },
+      { gx: 15, gy: 19, kind: 'shelf' },
+      // 廊下: 観葉植物とラゲッジカート
+      { gx: 2,  gy: 8,  kind: 'plant' },  { gx: 15, gy: 8, kind: 'plant' },
+      { gx: 2,  gy: 15, kind: 'plant' },  { gx: 12, gy: 15, kind: 'luggage' },
+      { gx: 17, gy: 13, kind: 'luggage' },
+      // 宴会場: 丸テーブル
+      { gx: 21, gy: 14, kind: 'table' },  { gx: 22, gy: 16, kind: 'table' },
+      { gx: 21, gy: 19, kind: 'table' },  { gx: 22, gy: 21, kind: 'table' },
+      { gx: 15, gy: 22, kind: 'plant' },
+    ],
+    vehicles: [],
+    fences: [],
+    buildings: [
+      // フロア全体を覆う天井。屋内であることを表現する
+      { id: 'floor3', name: 'ホテル3階',
+        gx0: 1, gy0: 1, gx1: 24, gy1: 24,
+        inner: { gx0: 2, gy0: 2, gx1: 23, gy1: 23 },
+        wallTop: 4.8, roofThickness: 0.35, roofStyle: 'ceiling',
+        ceilingLights: true,
+        color: 0xd9cfba, roofColor: 0xe6dfd0, trussColor: 0x8a7a60 },
+    ],
+    playerStart: { gx: 4,  gy: 20 },
+    pvpHost:     { gx: 4,  gy: 20 },
+    pvpGuest:    { gx: 22, gy: 7  }, // ロビーの床(メザニンは高所すぎるので開始地点にしない)
+    enemySpawns: [
+      { type: 'grunt',      gx: 21, gy: 3,  room: 'メザニン' },
+      { type: 'rusher',     gx: 5,  gy: 3,  room: '客室301' },
+      { type: 'bruiser',    gx: 18, gy: 9,  room: 'ラウンジ' },
+      { type: 'sniper',     gx: 22, gy: 3,  room: 'メザニン' },
+      { type: 'gunner',     gx: 21, gy: 17, room: '宴会場' },
+      { type: 'heavy',      gx: 17, gy: 15, room: 'エレベーターホール' },
+      { type: 'scout',      gx: 9,  gy: 8,  room: '北の廊下' },
+      { type: 'guard',      gx: 9,  gy: 16, room: '南の廊下' },
+      { type: 'skirmisher', gx: 11, gy: 20, room: '客室307' },
+      { type: 'juggernaut', gx: 20, gy: 6,  room: 'ロビー' },
+    ],
+    teamEnemySpawns: [
+      { type: 'grunt',   gx: 21, gy: 3,  room: 'メザニン' },
+      { type: 'bruiser', gx: 20, gy: 6,  room: 'ロビー' },
+      { type: 'sniper',  gx: 18, gy: 9,  room: 'ラウンジ' },
+      { type: 'gunner',  gx: 21, gy: 17, room: '宴会場' },
+      { type: 'scout',   gx: 17, gy: 15, room: 'エレベーターホール' },
+    ],
+    teamAllySpawns: [
+      { type: 'assault',  gx: 3, gy: 20 },
+      { type: 'scout',    gx: 5, gy: 20 },
+      { type: 'heavy',    gx: 3, gy: 21 },
+      { type: 'marksman', gx: 5, gy: 21 },
     ],
   },
 
@@ -1464,6 +1684,9 @@ const SensorSystem = (() => {
   // ---- 視点の定数 ----
   // 左右の視点感度。1.0で端末の回転角と同じ。大きいほど少ない動きで大きく振り向ける。
   const YAW_SENSITIVITY = 1.35;
+  // 実行中に感度を変える倍率。スコープで拡大しているときは細かく狙えるよう小さくする
+  let aimScale = 1.0;
+  function setAimScale(v) { aimScale = Math.max(0.05, Math.min(2, v)); }
   // 上下の視点感度。1.0だとカメラの上下が端末の傾きと完全に一致する。
   const PITCH_SENSITIVITY = 1.0;
   const PITCH_SMOOTH = 0.55;        // ピッチの平滑化(0〜1)。1で平滑化なし
@@ -1541,13 +1764,13 @@ const SensorSystem = (() => {
   function updateView() {
     if (pitchRawFiltered === null) return;
 
-    let yaw = (yawAccum - calYaw) * YAW_SENSITIVITY;
+    let yaw = (yawAccum - calYaw) * YAW_SENSITIVITY * aimScale;
     while (yaw > Math.PI) yaw -= Math.PI * 2;
     while (yaw < -Math.PI) yaw += Math.PI * 2;
 
     const maxPitch = THREE.MathUtils.degToRad(MAX_PITCH_DEG);
     const pitch = THREE.MathUtils.clamp(
-      (pitchRawFiltered - calPitch) * PITCH_SENSITIVITY, -maxPitch, maxPitch
+      (pitchRawFiltered - calPitch) * PITCH_SENSITIVITY * aimScale, -maxPitch, maxPitch
     );
 
     state.yawDeg = THREE.MathUtils.radToDeg(yaw);
@@ -1840,6 +2063,7 @@ const SensorSystem = (() => {
     calibrate,
     recenter: calibrate,
     ensureRunning,
+    setAimScale,
   };
 })();
 
@@ -2115,6 +2339,7 @@ const RELOAD_DURATION = 2.0;  // リロードにかかる時間(秒)
 const WeaponSystem = (() => {
   let currentKey = 'm4';
   let viewModelGroup = null;
+  let adsAmount = 0; // 0=通常, 1=完全に覗いた状態
   let recoilT = 0; // 反動アニメーションの進行度(0で静止)
   let flashT = 0;  // マズルフラッシュの進行度(0で非表示)
   let camera = null;
@@ -2399,10 +2624,18 @@ const WeaponSystem = (() => {
       }
     }
 
+    // 構え(スコープ)の度合いに応じて、銃を画面中央へ引き寄せる
+    if (viewModelGroup) {
+      const t = adsAmount;
+      viewModelGroup.position.x = 0.16 * (1 - t) + 0.0 * t;
+      viewModelGroup.rotation.y = -0.02 * (1 - t);
+      viewModelGroup.visible = t < 0.75; // 覗き込んだらスコープ表示に切り替わるので隠す
+    }
+
     if (viewModelGroup && recoilT > 0) {
       recoilT = Math.max(0, recoilT - dt * 6);
       const kick = recoilT * 0.06;
-      viewModelGroup.position.z = -0.35 + kick;
+      viewModelGroup.position.z = -0.35 + kick - adsAmount * 0.06;
       viewModelGroup.rotation.x = -recoilT * 0.15;
     } else if (viewModelGroup && isReloading) {
       // リロード中: 銃口を下に傾け、少し下げる(マガジン交換の演出)
@@ -2411,8 +2644,8 @@ const WeaponSystem = (() => {
       viewModelGroup.position.y = -0.16 - dip * 0.12;
       viewModelGroup.rotation.x = dip * 0.4;
     } else if (viewModelGroup) {
-      viewModelGroup.position.z = -0.35;
-      viewModelGroup.position.y = -0.16;
+      viewModelGroup.position.z = -0.35 - adsAmount * 0.06;
+      viewModelGroup.position.y = -0.16 + adsAmount * 0.11;
       viewModelGroup.rotation.x = 0;
     }
 
@@ -2437,6 +2670,7 @@ const WeaponSystem = (() => {
 
   return {
     init, setWeapon, getDamage, getCooldownMs, triggerRecoil, triggerMuzzleFlash, update, getCurrentKey,
+    setAdsAmount: (v) => { adsAmount = Math.max(0, Math.min(1, v)); },
     getAmmo, getMagSize, getIsReloading, getReloadProgress, tryConsumeAmmo, startReload,
   };
 })();
@@ -2453,47 +2687,47 @@ const WeaponSystem = (() => {
 const ENEMY_TYPES = {
   grunt: {
     label: 'グラント', attack: 'melee', hp: 60, speed: 2.5, dmg: 12,
-    detectRange: 14, atkRange: 1.6, color: 0xcc4444, size: 1.0,
+    detectRange: 14, atkRange: 1.6, color: 0xcc4444, size: 1.55,
   },
   rusher: {
     label: 'ラッシャー', attack: 'melee', hp: 35, speed: 4.2, dmg: 10,
-    detectRange: 15, atkRange: 1.5, color: 0xff8844, size: 1.0,
+    detectRange: 15, atkRange: 1.5, color: 0xff8844, size: 1.55,
   },
   bruiser: {
     label: 'ブルーザー', attack: 'melee', hp: 130, speed: 1.4, dmg: 18,
-    detectRange: 12, atkRange: 1.8, color: 0x884444, size: 1.4,
+    detectRange: 12, atkRange: 1.8, color: 0x884444, size: 1.9,
   },
   sniper: {
     label: 'スナイパー', attack: 'ranged', hp: 30, speed: 1.25, dmg: 16,
-    detectRange: 20, atkRange: 16, color: 0x4488cc, size: 1.0,
+    detectRange: 20, atkRange: 16, color: 0x4488cc, size: 1.55,
     telegraphMs: 900, projectileSpeed: 14,
   },
   gunner: {
     label: 'ガンナー', attack: 'ranged', hp: 55, speed: 2.25, dmg: 12,
-    detectRange: 14, atkRange: 10, color: 0x44aacc, size: 1.0,
+    detectRange: 14, atkRange: 10, color: 0x44aacc, size: 1.55,
     telegraphMs: 650, projectileSpeed: 12,
   },
   heavy: {
     label: 'ヘヴィ', attack: 'ranged', hp: 140, speed: 1.15, dmg: 22,
-    detectRange: 13, atkRange: 11, color: 0x3366aa, size: 1.4,
+    detectRange: 13, atkRange: 11, color: 0x3366aa, size: 1.9,
     telegraphMs: 1000, projectileSpeed: 11,
   },
   scout: {
     label: 'スカウト', attack: 'melee', hp: 20, speed: 5.2, dmg: 8,
-    detectRange: 18, atkRange: 1.4, color: 0xffbb33, size: 1.0,
+    detectRange: 18, atkRange: 1.4, color: 0xffbb33, size: 1.55,
   },
   guard: {
     label: 'ガード', attack: 'melee', hp: 120, speed: 1.25, dmg: 16,
-    detectRange: 8, atkRange: 1.7, color: 0x996633, size: 1.3,
+    detectRange: 8, atkRange: 1.7, color: 0x996633, size: 1.8,
   },
   skirmisher: {
     label: 'スカーミッシャー', attack: 'ranged', hp: 40, speed: 3.25, dmg: 10,
-    detectRange: 15, atkRange: 9, color: 0x66cccc, size: 1.0,
+    detectRange: 15, atkRange: 9, color: 0x66cccc, size: 1.55,
     telegraphMs: 550, projectileSpeed: 13,
   },
   juggernaut: {
     label: 'ジャガーノート', attack: 'melee', hp: 220, speed: 1.0, dmg: 28,
-    detectRange: 16, atkRange: 2.0, color: 0x661111, size: 1.7,
+    detectRange: 16, atkRange: 2.0, color: 0x661111, size: 2.1,
   },
 };
 
@@ -2987,19 +3221,19 @@ const EnemyManager = (() => {
 const ALLY_TYPES = {
   assault: {
     label: 'アサルト', hp: 70, speed: 2.9, dmg: 14,
-    atkRange: 9, detectRange: 16, cooldown: 0.9, color: 0x3388ff, size: 1.0,
+    atkRange: 9, detectRange: 16, cooldown: 0.9, color: 0x3388ff, size: 1.55,
   },
   scout: {
     label: 'スカウト', hp: 45, speed: 4.2, dmg: 10,
-    atkRange: 7, detectRange: 18, cooldown: 0.7, color: 0x33bbff, size: 0.85,
+    atkRange: 7, detectRange: 18, cooldown: 0.7, color: 0x33bbff, size: 1.55,
   },
   heavy: {
     label: 'ヘヴィ', hp: 130, speed: 1.5, dmg: 20,
-    atkRange: 8, detectRange: 14, cooldown: 1.2, color: 0x2255aa, size: 1.4,
+    atkRange: 8, detectRange: 14, cooldown: 1.2, color: 0x2255aa, size: 1.9,
   },
   marksman: {
     label: 'マークスマン', hp: 50, speed: 1.75, dmg: 24,
-    atkRange: 15, detectRange: 20, cooldown: 1.4, color: 0x66aaff, size: 0.9,
+    atkRange: 15, detectRange: 20, cooldown: 1.4, color: 0x66aaff, size: 1.55,
   },
 };
 
@@ -3521,7 +3755,7 @@ const PvpSystem = (() => {
   let remoteAlive = true;
 
   function buildAvatar() {
-    const s = 1.0;
+    const s = 1.55; // 敵キャラと同じ大きさに揃える
     const group = new THREE.Group();
     const skinMat = new THREE.MeshStandardMaterial({ color: 0xe0ac80, roughness: 0.8 });
     const shirtMat = new THREE.MeshStandardMaterial({ color: 0xdd3333, roughness: 0.7 }); // 対戦相手カラー(赤)
@@ -3737,9 +3971,9 @@ const PvpSystem = (() => {
   const DIAGONAL_MAX_RATIO = 1.15; // 斜め移動時に許す最大速度(前進速度に対する比率)
   const MOVE_ACCEL_TAU = 0.09;   // 加速の時定数(秒)。小さいほどキビキビ動く
   const MOVE_DECEL_TAU = 0.15;   // 減速の時定数(秒)。少し長めにして足踏み検出の途切れを吸収する
-  const PLAYER_RADIUS = 0.35;    // 衝突判定用の簡易半径
-  const EYE_HEIGHT = 1.65;
-  const WALL_HEIGHT = 3.2;
+  const PLAYER_RADIUS = 0.42;    // 衝突判定用の簡易半径(キャラの体格に合わせる)
+  const EYE_HEIGHT = 1.90;       // 目線の高さ。キャラの身長(約2.1m)のあごの位置あたり
+  let WALL_HEIGHT = 3.2; // ステージのテーマで上書きされる(屋内は天井を高くする)
   const PLAYER_MAX_HP = 100;
 
   // ---- DOM参照 ----
@@ -3785,6 +4019,8 @@ const PvpSystem = (() => {
     calCount: document.getElementById('cal-count'),
     btnCalibrate: document.getElementById('btn-calibrate'),
     hudTools: document.getElementById('hud-tools'),
+    btnScope: document.getElementById('btn-scope'),
+    scopeOverlay: document.getElementById('scope-overlay'),
     btnRecenter: document.getElementById('btn-recenter'),
     btnSensorDebug: document.getElementById('btn-sensor-debug'),
     sensorDebug: document.getElementById('sensor-debug'),
@@ -3863,6 +4099,13 @@ const PvpSystem = (() => {
   let wasReloading = false;    // リロード開始の瞬間を検知するためのフラグ
   let lastFootstepCount = 0;
   let sensorWatchdogTimer = 0;
+  // ---- スコープ(覗き撃ち) ----
+  const FOV_NORMAL = 75;
+  const FOV_SCOPED = 26;          // 約2.9倍の拡大
+  const SCOPE_MOVE_RATIO = 0.45;  // 覗いている間は移動が遅くなる
+  const SCOPE_LERP = 12;          // 覗き込み/解除の速さ
+  let scoped = false;             // 覗くボタンの状態
+  let scopeT = 0;                 // 0=通常 1=完全に覗いた状態(補間値)
   let hudThrottle = 0;   // 足音再生のトリガー検知用
   // 対戦モード(2人)用
   let pvpIsHost = false;
@@ -3892,6 +4135,8 @@ const PvpSystem = (() => {
   window.addEventListener('keydown', (e) => {
     const dir = KEY_MAP[e.code];
     if (dir) { keyState[dir] = true; e.preventDefault(); }
+    // PCでの操作用: Q または右Shift でスコープの切り替え
+    if ((e.code === 'KeyQ' || e.code === 'ShiftRight') && !e.repeat) { toggleScope(); e.preventDefault(); }
   });
   window.addEventListener('keyup', (e) => {
     const dir = KEY_MAP[e.code];
@@ -3948,17 +4193,15 @@ const PvpSystem = (() => {
     renderer.setSize(window.innerWidth, window.innerHeight);
     el.canvasContainer.appendChild(renderer.domElement);
 
-    // 環境光(屋外の日中を想定。空色の上方光+地面の照り返し)
-    const ambient = new THREE.AmbientLight(0xffffff, 0.6);
-    scene.add(ambient);
-    const hemi = new THREE.HemisphereLight(0x9fc4e0, 0xcdb98a, 1.0);
-    scene.add(hemi);
-
-    // 太陽光(斜め上から差す平行光源)
-    const sun = new THREE.DirectionalLight(0xfff3d6, 1.4);
-    sun.position.set(20, 30, 10);
-    scene.add(sun);
-    scene.add(sun.target);
+    // 環境光。ステージのテーマに応じて buildLevel() で明るさと色を切り替える
+    ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+    hemiLight = new THREE.HemisphereLight(0x9fc4e0, 0xcdb98a, 1.0);
+    scene.add(hemiLight);
+    sunLight = new THREE.DirectionalLight(0xfff3d6, 1.4);
+    sunLight.position.set(20, 30, 10);
+    scene.add(sunLight);
+    scene.add(sunLight.target);
 
     scene.add(camera);
 
@@ -3975,6 +4218,7 @@ const PvpSystem = (() => {
   // ---- ステージのジオメトリを組み立てる(ステージ切り替えのたびに呼ぶ) ----
   let levelGroup = null;
   let builtStageId = null;
+  let ambientLight = null, hemiLight = null, sunLight = null;
 
   function disposeGroup(group) {
     group.traverse((o) => {
@@ -3997,10 +4241,21 @@ const PvpSystem = (() => {
     bulletHoles = [];
 
     const th = STAGE.theme;
-    scene.background = new THREE.Color(th.skyBottom);
+    WALL_HEIGHT = th.wallHeight || 3.2;
+    scene.background = new THREE.Color(th.light && th.light.background !== undefined
+      ? th.light.background : th.skyBottom);
     scene.fog = new THREE.Fog(th.fog, th.fogNear, th.fogFar);
 
-    buildSky();
+    // 照明(屋外は日中の太陽、屋内は暖色の間接照明)
+    const li = th.light || {};
+    ambientLight.intensity = li.ambient !== undefined ? li.ambient : 0.6;
+    hemiLight.color.setHex(li.hemiSky !== undefined ? li.hemiSky : 0x9fc4e0);
+    hemiLight.groundColor.setHex(li.hemiGround !== undefined ? li.hemiGround : 0xcdb98a);
+    hemiLight.intensity = li.hemi !== undefined ? li.hemi : 1.0;
+    sunLight.color.setHex(li.sun !== undefined ? li.sun : 0xfff3d6);
+    sunLight.intensity = li.sunIntensity !== undefined ? li.sunIntensity : 1.4;
+
+    if (!th.indoor) buildSky(); // 屋内は天井があるので空は作らない
     buildMap();
     buildDoorframes();
     buildColumns();
@@ -4011,6 +4266,7 @@ const PvpSystem = (() => {
     buildPerimeter();
     buildDuctProps();
     buildFences();
+    buildWallDecor();
     buildMinimapStatic();
     builtStageId = currentStageId;
   }
@@ -4130,6 +4386,17 @@ const PvpSystem = (() => {
       ctx.moveTo(s / 2, 0); ctx.lineTo(s / 2, s);
       ctx.moveTo(0, s / 2); ctx.lineTo(s, s / 2);
       ctx.lineWidth = s * 0.012; ctx.stroke();
+      if (STAGE.theme.indoor) {
+        // カーペットの地模様(細かい菱形)と縁のライン
+        ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+        ctx.lineWidth = s * 0.012;
+        for (let i = -4; i < 8; i++) {
+          ctx.beginPath();
+          ctx.moveTo(s * i / 4, 0); ctx.lineTo(s * (i + 4) / 4, s); ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(s * (i + 4) / 4, 0); ctx.lineTo(s * i / 4, s); ctx.stroke();
+        }
+      }
       ctx.fillStyle = t.grime;
       for (let i = 0; i < 5; i++) {
         ctx.fillRect(Math.random() * s, Math.random() * s, s * 0.14, s * 0.14);
@@ -4170,6 +4437,39 @@ const PvpSystem = (() => {
         const grad = ctx.createLinearGradient(0, 0, 0, s);
         grad.addColorStop(0, 'rgba(255,250,235,0.10)');
         grad.addColorStop(1, 'rgba(0,0,0,0.14)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, s, s);
+      });
+    }
+    if (STAGE.theme.wallStyle === 'interior') {
+      // ホテルの内装。腰壁(ダド)+モールディング+縦のストライプ壁紙
+      return makeCanvasTexture((ctx, s) => {
+        ctx.fillStyle = t.base;
+        ctx.fillRect(0, 0, s, s);
+        // 壁紙の縦ストライプ
+        ctx.fillStyle = 'rgba(255,255,255,0.10)';
+        for (let i = 0; i < 8; i++) ctx.fillRect(s * (i / 8), 0, s * 0.055, s);
+        // 天井まわりの回り縁
+        ctx.fillStyle = t.trim;
+        ctx.fillRect(0, 0, s, s * 0.05);
+        ctx.fillStyle = 'rgba(255,255,255,0.18)';
+        ctx.fillRect(0, s * 0.05, s, s * 0.012);
+        // 腰壁(下半分の板張り)とチェアレール
+        ctx.fillStyle = t.panel;
+        ctx.fillRect(0, s * 0.6, s, s * 0.4);
+        ctx.fillStyle = t.trim;
+        ctx.fillRect(0, s * 0.58, s, s * 0.035);
+        ctx.strokeStyle = 'rgba(0,0,0,0.16)';
+        ctx.lineWidth = s * 0.01;
+        for (let i = 0; i < 4; i++) {
+          ctx.strokeRect(s * (0.04 + i * 0.24), s * 0.66, s * 0.18, s * 0.26);
+        }
+        // 巾木
+        ctx.fillStyle = t.trim;
+        ctx.fillRect(0, s * 0.955, s, s * 0.045);
+        const grad = ctx.createLinearGradient(0, 0, 0, s);
+        grad.addColorStop(0, 'rgba(255,240,215,0.16)');
+        grad.addColorStop(1, 'rgba(0,0,0,0.18)');
         ctx.fillStyle = grad;
         ctx.fillRect(0, 0, s, s);
       });
@@ -4466,10 +4766,12 @@ const PvpSystem = (() => {
         m.position.set((x0 + x1) / 2, bandY0 + bandH / 2, (z0 + z1) / 2);
         wallGroup.add(m);
       };
-      addBand(oMinX, oMinZ, oMaxX, iMinZ);   // 北
-      addBand(oMinX, iMaxZ, oMaxX, oMaxZ);   // 南
-      addBand(oMinX, iMinZ, iMinX, iMaxZ);   // 西
-      addBand(iMaxX, iMinZ, oMaxX, iMaxZ);   // 東
+      if (bandH > 0.02) {
+        addBand(oMinX, oMinZ, oMaxX, iMinZ);   // 北
+        addBand(oMinX, iMaxZ, oMaxX, oMaxZ);   // 南
+        addBand(oMinX, iMinZ, iMinX, iMaxZ);   // 西
+        addBand(iMaxX, iMinZ, oMaxX, iMaxZ);   // 東
+      }
 
       // 天井
       const roof = new THREE.Mesh(
@@ -4496,23 +4798,107 @@ const PvpSystem = (() => {
         });
       }
 
-      // 屋内の梁(トラス)。天井のすぐ下に等間隔で渡す
-      const spanX = iMaxX - iMinX;
-      const count = Math.max(2, Math.round((iMaxZ - iMinZ) / 5));
-      for (let i = 0; i <= count; i++) {
-        const pz = iMinZ + (iMaxZ - iMinZ) * i / count;
-        const truss = new THREE.Mesh(new THREE.BoxGeometry(spanX, 0.26, 0.24), trussMat);
-        truss.position.set((iMinX + iMaxX) / 2, bandY1 - 0.2, pz);
-        wallGroup.add(truss);
+      if (bld.roofStyle === 'ceiling') {
+        // 屋内の天井: 照明パネルと回り縁だけを入れる(梁は出さない)
+        if (bld.ceilingLights) {
+          const panelMat = new THREE.MeshBasicMaterial({ color: 0xfff2d4 });
+          const frameMat = new THREE.MeshStandardMaterial({ color: 0xbdb3a0, roughness: 0.6 });
+          const stepX = CELL_SIZE * 3, stepZ = CELL_SIZE * 3;
+          for (let px = iMinX + stepX / 2; px < iMaxX; px += stepX) {
+            for (let pz = iMinZ + stepZ / 2; pz < iMaxZ; pz += stepZ) {
+              const g = worldToGrid(px, pz);
+              if (!isWalkable(g.gx, g.gy)) continue; // 壁の上には付けない
+              const frame = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.1, 1.0), frameMat);
+              frame.position.set(px, bandY1 - 0.05, pz);
+              levelGroup.add(frame);
+              const panel = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.06, 0.82), panelMat);
+              panel.position.set(px, bandY1 - 0.11, pz);
+              levelGroup.add(panel);
+            }
+          }
+        }
+      } else {
+        // 屋内の梁(トラス)。天井のすぐ下に等間隔で渡す
+        const spanX = iMaxX - iMinX;
+        const count = Math.max(2, Math.round((iMaxZ - iMinZ) / 5));
+        for (let i = 0; i <= count; i++) {
+          const pz = iMinZ + (iMaxZ - iMinZ) * i / count;
+          const truss = new THREE.Mesh(new THREE.BoxGeometry(spanX, 0.26, 0.24), trussMat);
+          truss.position.set((iMinX + iMaxX) / 2, bandY1 - 0.2, pz);
+          wallGroup.add(truss);
+        }
+        // 縦の支柱(四隅の内側)
+        [[iMinX + 0.3, iMinZ + 0.3], [iMaxX - 0.3, iMinZ + 0.3],
+         [iMinX + 0.3, iMaxZ - 0.3], [iMaxX - 0.3, iMaxZ - 0.3]].forEach(([px, pz]) => {
+          const post = new THREE.Mesh(new THREE.BoxGeometry(0.26, bandY1, 0.26), trussMat);
+          post.position.set(px, bandY1 / 2, pz);
+          wallGroup.add(post);
+        });
       }
-      // 縦の支柱(四隅の内側)
-      [[iMinX + 0.3, iMinZ + 0.3], [iMaxX - 0.3, iMinZ + 0.3],
-       [iMinX + 0.3, iMaxZ - 0.3], [iMaxX - 0.3, iMaxZ - 0.3]].forEach(([px, pz]) => {
-        const post = new THREE.Mesh(new THREE.BoxGeometry(0.26, bandY1, 0.26), trussMat);
-        post.position.set(px, bandY1 / 2, pz);
-        wallGroup.add(post);
-      });
     });
+  }
+
+  // ---- 壁の装飾: 絵画とブラケット照明 ----
+  // 歩ける床に面している壁を探し、決まった規則で絵画や照明を掛ける。
+  // 座標から配置を決めるので、毎回まったく同じ内装になる。
+  function buildWallDecor() {
+    if (!STAGE.theme.wallDecor) return;
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0x6b4a24, roughness: 0.5, metalness: 0.3 });
+    const goldMat = new THREE.MeshStandardMaterial({ color: 0xc9a24a, roughness: 0.35, metalness: 0.8 });
+    const canvasMats = [0x3d5a6c, 0x6b4a5a, 0x4a5f3d, 0x7a5f3a, 0x54506b].map(
+      (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.9 }));
+    const glowMat = new THREE.MeshBasicMaterial({ color: 0xffe9bc });
+
+    const dirs = [
+      { dx: 0, dy: -1, rot: 0 },          // 北の壁(南を向く)
+      { dx: 0, dy: 1, rot: Math.PI },     // 南の壁
+      { dx: -1, dy: 0, rot: Math.PI / 2 },// 西の壁
+      { dx: 1, dy: 0, rot: -Math.PI / 2 },// 東の壁
+    ];
+    let n = 0;
+    for (let gy = 1; gy < GRID_SIZE - 1; gy++) {
+      for (let gx = 1; gx < GRID_SIZE - 1; gx++) {
+        if (!isWalkable(gx, gy)) continue;
+        if (getGroundHeightAtGrid(gx + 0.5, gy + 0.5) > 0.05) continue; // 高所には掛けない
+        for (const d of dirs) {
+          if (isWalkable(gx + d.dx, gy + d.dy)) continue; // 壁でなければ対象外
+          n++;
+          const pick = (gx * 7 + gy * 13 + d.dx * 3 + d.dy * 5 + 100) % 7;
+          if (pick > 2) continue; // 全部には掛けず、間隔を空ける
+          const w = gridToWorld(gx, gy);
+          const px = w.x + d.dx * (CELL_SIZE / 2 - 0.06);
+          const pz = w.z + d.dy * (CELL_SIZE / 2 - 0.06);
+          const group = new THREE.Group();
+          if (pick === 2) {
+            // ブラケット照明
+            const arm = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.22), goldMat);
+            arm.position.set(0, 0, 0.11); group.add(arm);
+            const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.2, 0.28, 10, 1, true), glowMat);
+            shade.position.set(0, 0.14, 0.24); group.add(shade);
+            group.position.set(px, 2.3, pz);
+          } else {
+            // 額縁つきの絵画(縦長と横長の2種類)
+            const tall = pick === 1;
+            const fw = tall ? 0.85 : 1.35, fh = tall ? 1.15 : 0.8;
+            const frame = new THREE.Mesh(new THREE.BoxGeometry(fw, fh, 0.09), frameMat);
+            group.add(frame);
+            const art = new THREE.Mesh(
+              new THREE.BoxGeometry(fw - 0.18, fh - 0.18, 0.04),
+              canvasMats[(gx + gy) % canvasMats.length]);
+            art.position.z = 0.05; group.add(art);
+            const trim = new THREE.Mesh(new THREE.BoxGeometry(fw - 0.1, fh - 0.1, 0.02), goldMat);
+            trim.position.z = 0.055; group.add(trim);
+            const art2 = new THREE.Mesh(
+              new THREE.BoxGeometry(fw - 0.22, fh - 0.22, 0.03),
+              canvasMats[(gx * 3 + gy) % canvasMats.length]);
+            art2.position.z = 0.07; group.add(art2);
+            group.position.set(px, 1.85, pz);
+          }
+          group.rotation.y = d.rot;
+          levelGroup.add(group); // 弾は通す(壁が受け止める)
+        }
+      }
+    }
   }
 
   // ---- 遮蔽物: 場所の雰囲気に合わせて形と色を変える ----
@@ -4541,6 +4927,21 @@ const PvpSystem = (() => {
       stone:     new THREE.MeshStandardMaterial({ color: 0xd8d2c0, roughness: 0.85 }),
       stoneD:    new THREE.MeshStandardMaterial({ color: 0xb6ae9a, roughness: 0.9 }),
       tarp:      new THREE.MeshStandardMaterial({ color: 0x8e8f89, roughness: 0.95 }),
+      // --- ホテルの家具 ---
+      linen:     new THREE.MeshStandardMaterial({ color: 0xf0ece0, roughness: 0.95 }),
+      duvet:     new THREE.MeshStandardMaterial({ color: 0x9c3b46, roughness: 0.9 }),
+      darkWood:  new THREE.MeshStandardMaterial({ color: 0x5a3b28, roughness: 0.65 }),
+      warmWood:  new THREE.MeshStandardMaterial({ color: 0x8a5f3a, roughness: 0.6 }),
+      marble:    new THREE.MeshStandardMaterial({ color: 0xe8e3d6, roughness: 0.35, metalness: 0.1 }),
+      brass:     new THREE.MeshStandardMaterial({ color: 0xc9a24a, roughness: 0.35, metalness: 0.8 }),
+      fabric:    new THREE.MeshStandardMaterial({ color: 0x4a5a6b, roughness: 0.95 }),
+      leaf:      new THREE.MeshStandardMaterial({ color: 0x3e7a45, roughness: 0.85 }),
+      leafDark:  new THREE.MeshStandardMaterial({ color: 0x2f5f36, roughness: 0.85 }),
+      pot:       new THREE.MeshStandardMaterial({ color: 0x8a7256, roughness: 0.8 }),
+      cloth:     new THREE.MeshStandardMaterial({ color: 0xf2ece0, roughness: 0.95 }),
+      fridge:    new THREE.MeshStandardMaterial({ color: 0xdde1e3, roughness: 0.35, metalness: 0.5 }),
+      steelBright: new THREE.MeshStandardMaterial({ color: 0xb9bfc2, roughness: 0.35, metalness: 0.7 }),
+      lampShade: new THREE.MeshStandardMaterial({ color: 0xfff0cf, roughness: 0.8, side: THREE.DoubleSide }),
     };
     const S = CELL_SIZE;
 
@@ -4625,6 +5026,171 @@ const PvpSystem = (() => {
         // 荷締めベルト
         const belt = new THREE.Mesh(new THREE.BoxGeometry(S * 0.94, 0.07, 0.14), mats.rib);
         belt.position.y = 0.95; g.add(belt);
+      } else if (kind === 'bed') {
+        // ベッド: 低いので撃ち越せるが、通り抜けはできない
+        const legs = new THREE.Mesh(new THREE.BoxGeometry(S * 0.62, 0.22, S * 0.82), mats.darkWood);
+        legs.position.y = 0.11; g.add(legs);
+        const mat2 = new THREE.Mesh(new THREE.BoxGeometry(S * 0.68, 0.32, S * 0.86), mats.linen);
+        mat2.position.y = 0.38; g.add(mat2);
+        const duvet = new THREE.Mesh(new THREE.BoxGeometry(S * 0.7, 0.14, S * 0.6), mats.duvet);
+        duvet.position.set(0, 0.58, S * 0.1); g.add(duvet);
+        [-0.18, 0.18].forEach((ox) => {
+          const pillow = new THREE.Mesh(new THREE.BoxGeometry(S * 0.28, 0.14, S * 0.16), mats.linen);
+          pillow.position.set(ox * S, 0.6, -S * 0.28); g.add(pillow);
+        });
+        const head = new THREE.Mesh(new THREE.BoxGeometry(S * 0.72, 0.95, 0.14), mats.darkWood);
+        head.position.set(0, 0.6, -S * 0.42); g.add(head);
+      } else if (kind === 'fridge') {
+        // 冷蔵庫(2ドア)
+        const body = new THREE.Mesh(new THREE.BoxGeometry(S * 0.62, 2.0, S * 0.5), mats.fridge);
+        body.position.y = 1.0; g.add(body);
+        const split = new THREE.Mesh(new THREE.BoxGeometry(S * 0.64, 0.05, S * 0.52), mats.rib);
+        split.position.y = 1.32; g.add(split);
+        [[0.62, S * 0.26], [1.66, S * 0.26]].forEach(([py]) => {
+          const handle = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.5, 0.07), mats.steelBright);
+          handle.position.set(S * 0.24, py, S * 0.27); g.add(handle);
+        });
+        const top = new THREE.Mesh(new THREE.BoxGeometry(S * 0.66, 0.08, S * 0.54), mats.rib);
+        top.position.y = 2.02; g.add(top);
+      } else if (kind === 'desk') {
+        // 机と椅子(客室のデスクセット)
+        const top = new THREE.Mesh(new THREE.BoxGeometry(S * 0.9, 0.09, S * 0.42), mats.warmWood);
+        top.position.y = 0.78; g.add(top);
+        [[-0.4, -0.17], [0.4, -0.17], [-0.4, 0.17], [0.4, 0.17]].forEach(([ox, oz]) => {
+          const leg = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.78, 0.08), mats.darkWood);
+          leg.position.set(ox * S, 0.39, oz * S); g.add(leg);
+        });
+        const drawer = new THREE.Mesh(new THREE.BoxGeometry(S * 0.3, 0.4, S * 0.36), mats.darkWood);
+        drawer.position.set(S * 0.26, 0.55, 0); g.add(drawer);
+        // 椅子
+        const seat = new THREE.Mesh(new THREE.BoxGeometry(S * 0.32, 0.08, S * 0.32), mats.fabric);
+        seat.position.set(-S * 0.06, 0.5, S * 0.34); g.add(seat);
+        const back = new THREE.Mesh(new THREE.BoxGeometry(S * 0.32, 0.5, 0.07), mats.darkWood);
+        back.position.set(-S * 0.06, 0.78, S * 0.5); g.add(back);
+        [[-0.13, 0.22], [0.02, 0.22], [-0.13, 0.46], [0.02, 0.46]].forEach(([ox, oz]) => {
+          const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.5, 6), mats.rib);
+          leg.position.set(ox * S, 0.25, oz * S); g.add(leg);
+        });
+        // デスクランプ
+        const lampBase = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.13, 0.05, 10), mats.brass);
+        lampBase.position.set(-S * 0.3, 0.85, -S * 0.1); g.add(lampBase);
+        const lampArm = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.45, 6), mats.brass);
+        lampArm.position.set(-S * 0.3, 1.08, -S * 0.1); g.add(lampArm);
+        const shade = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.2, 10, 1, true), mats.lampShade);
+        shade.position.set(-S * 0.3, 1.34, -S * 0.1); g.add(shade);
+      } else if (kind === 'shelf') {
+        // 倉庫のスチール棚(段ごとに箱が載っている)
+        [[-0.36, -0.18], [0.36, -0.18], [-0.36, 0.18], [0.36, 0.18]].forEach(([ox, oz]) => {
+          const post = new THREE.Mesh(new THREE.BoxGeometry(0.09, 2.3, 0.09), mats.rib);
+          post.position.set(ox * S, 1.15, oz * S); g.add(post);
+        });
+        [0.45, 1.1, 1.75, 2.28].forEach((py, i) => {
+          const board = new THREE.Mesh(new THREE.BoxGeometry(S * 0.78, 0.07, S * 0.42), mats.steelBright);
+          board.position.y = py; g.add(board);
+          if (i < 3) {
+            const n2 = 2 + ((o.gx + i) % 2);
+            for (let k = 0; k < n2; k++) {
+              const box = new THREE.Mesh(
+                new THREE.BoxGeometry(S * 0.2, 0.32, S * 0.28),
+                (i + k) % 2 ? mats.wood : mats.linen);
+              box.position.set((k - (n2 - 1) / 2) * S * 0.24, py + 0.2, 0); g.add(box);
+            }
+          }
+        });
+      } else if (kind === 'wardrobe') {
+        // クローゼット: 背が高く視線を遮る
+        const body = new THREE.Mesh(new THREE.BoxGeometry(S * 0.8, 2.2, S * 0.45), mats.darkWood);
+        body.position.y = 1.1; g.add(body);
+        [-0.19, 0.19].forEach((ox) => {
+          const door = new THREE.Mesh(new THREE.BoxGeometry(S * 0.36, 1.95, 0.06), mats.warmWood);
+          door.position.set(ox * S, 1.1, S * 0.24); g.add(door);
+          const knob = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), mats.brass);
+          knob.position.set(ox * S + (ox > 0 ? -0.18 : 0.18), 1.15, S * 0.28); g.add(knob);
+        });
+        const top = new THREE.Mesh(new THREE.BoxGeometry(S * 0.86, 0.1, S * 0.5), mats.warmWood);
+        top.position.y = 2.22; g.add(top);
+      } else if (kind === 'sofa') {
+        const base = new THREE.Mesh(new THREE.BoxGeometry(S * 0.82, 0.38, S * 0.6), mats.fabric);
+        base.position.y = 0.24; g.add(base);
+        const back = new THREE.Mesh(new THREE.BoxGeometry(S * 0.82, 0.55, 0.22), mats.fabric);
+        back.position.set(0, 0.63, -S * 0.26); g.add(back);
+        [-0.34, 0.34].forEach((ox) => {
+          const arm = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.32, S * 0.6), mats.fabric);
+          arm.position.set(ox * S, 0.55, 0); g.add(arm);
+        });
+        [-0.2, 0.2].forEach((ox) => {
+          const cushion = new THREE.Mesh(new THREE.BoxGeometry(S * 0.34, 0.14, S * 0.5), mats.linen);
+          cushion.position.set(ox * S, 0.5, 0.05); g.add(cushion);
+        });
+        [-0.34, 0.34].forEach((ox) => [-0.24, 0.24].forEach((oz) => {
+          const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.1, 6), mats.darkWood);
+          leg.position.set(ox * S, 0.05, oz * S); g.add(leg);
+        }));
+      } else if (kind === 'plant') {
+        // 観葉植物: 鉢と葉。背は高いが細いので、遮蔽としては弱い
+        const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.32, 0.6, 10), mats.pot);
+        pot.position.y = 0.3; g.add(pot);
+        const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.46, 0.1, 10), mats.warmWood);
+        rim.position.y = 0.6; g.add(rim);
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.7, 6), mats.warmWood);
+        trunk.position.y = 0.95; g.add(trunk);
+        for (let i = 0; i < 7; i++) {
+          const a2 = (i / 7) * Math.PI * 2 + rnd;
+          const r2 = 0.34 + (i % 2) * 0.18;
+          const leaf = new THREE.Mesh(new THREE.SphereGeometry(0.36, 7, 5), i % 2 ? mats.leaf : mats.leafDark);
+          leaf.scale.set(1, 0.42, 0.55);
+          leaf.position.set(Math.cos(a2) * r2, 1.32 + (i % 3) * 0.16, Math.sin(a2) * r2);
+          leaf.rotation.y = -a2; leaf.rotation.z = 0.4;
+          g.add(leaf);
+        }
+      } else if (kind === 'counter') {
+        // 受付カウンター
+        const body = new THREE.Mesh(new THREE.BoxGeometry(S * 0.95, 1.05, S * 0.55), mats.darkWood);
+        body.position.y = 0.53; g.add(body);
+        const front = new THREE.Mesh(new THREE.BoxGeometry(S * 0.98, 0.7, 0.06), mats.warmWood);
+        front.position.set(0, 0.5, S * 0.29); g.add(front);
+        const top = new THREE.Mesh(new THREE.BoxGeometry(S * 1.02, 0.12, S * 0.68), mats.marble);
+        top.position.y = 1.11; g.add(top);
+        const trim2 = new THREE.Mesh(new THREE.BoxGeometry(S * 0.98, 0.05, 0.08), mats.brass);
+        trim2.position.set(0, 0.86, S * 0.3); g.add(trim2);
+        const bell = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 6, 0, Math.PI * 2, 0, Math.PI / 2), mats.brass);
+        bell.position.set(S * 0.28, 1.17, 0); g.add(bell);
+      } else if (kind === 'table') {
+        // 宴会場の丸テーブルと椅子
+        const cloth2 = new THREE.Mesh(new THREE.CylinderGeometry(S * 0.36, S * 0.4, 0.78, 14), mats.cloth);
+        cloth2.position.y = 0.39; g.add(cloth2);
+        const top = new THREE.Mesh(new THREE.CylinderGeometry(S * 0.38, S * 0.38, 0.08, 14), mats.marble);
+        top.position.y = 0.8; g.add(top);
+        for (let i = 0; i < 4; i++) {
+          const a3 = (i / 4) * Math.PI * 2 + rnd * 1.5;
+          const seat = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.1, 0.42), mats.fabric);
+          seat.position.set(Math.cos(a3) * S * 0.62, 0.46, Math.sin(a3) * S * 0.62);
+          seat.rotation.y = -a3; g.add(seat);
+          const back2 = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.5, 0.07), mats.darkWood);
+          back2.position.set(Math.cos(a3) * S * 0.78, 0.7, Math.sin(a3) * S * 0.78);
+          back2.rotation.y = -a3; g.add(back2);
+        }
+      } else if (kind === 'luggage') {
+        // ラゲッジカート
+        const frameMat2 = mats.brass;
+        [[-0.34, -0.22], [0.34, -0.22], [-0.34, 0.22], [0.34, 0.22]].forEach(([ox, oz]) => {
+          const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.6, 8), frameMat2);
+          post.position.set(ox * S, 0.8, oz * S); g.add(post);
+        });
+        const deck = new THREE.Mesh(new THREE.BoxGeometry(S * 0.78, 0.1, S * 0.5), mats.darkWood);
+        deck.position.y = 0.32; g.add(deck);
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(S * 0.74, 0.06, 0.06), frameMat2);
+        rail.position.set(0, 1.6, 0); g.add(rail);
+        [[-0.16, 0, 0.5], [0.18, 0.02, 0.42]].forEach(([ox, oz, h], i) => {
+          const bag = new THREE.Mesh(new THREE.BoxGeometry(S * 0.3, h, S * 0.28),
+            i ? mats.duvet : mats.darkWood);
+          bag.position.set(ox * S, 0.37 + h / 2, oz * S); g.add(bag);
+        });
+        [[-0.32, -0.2], [0.32, -0.2], [-0.32, 0.2], [0.32, 0.2]].forEach(([ox, oz]) => {
+          const w2 = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.06, 8), mats.rib);
+          w2.rotation.z = Math.PI / 2;
+          w2.position.set(ox * S, 0.1, oz * S); g.add(w2);
+        });
       } else { // stone: 神殿・ビル周りの石材
         const h = 1.3;
         const body = new THREE.Mesh(new THREE.BoxGeometry(S * 0.74, h * 0.72, S * 0.74), mats.stone);
@@ -5419,6 +5985,33 @@ const PvpSystem = (() => {
     }
   }
 
+  // スコープ: タップで覗く/戻す。画面タップの発射に伝播させない
+  function setScoped(on) {
+    scoped = on;
+    el.btnScope.classList.toggle('on', on);
+    el.scopeOverlay.classList.toggle('on', on);
+    el.crosshair.classList.toggle('hidden', on); // 覗いている間はスコープのレティクルを使う
+  }
+  // スコープを即座に解除して視野角も元に戻す(試合の開始・終了時に使う)
+  function resetScope() {
+    setScoped(false);
+    scopeT = 0;
+    if (camera) { camera.fov = FOV_NORMAL; camera.updateProjectionMatrix(); }
+    WeaponSystem.setAdsAmount(0);
+    SensorSystem.setAimScale(1);
+  }
+
+  function toggleScope(e) {
+    if (e) { e.preventDefault(); e.stopPropagation(); }
+    if (gameState !== 'playing') return;
+    setScoped(!scoped);
+  }
+  el.btnScope.addEventListener('pointerdown', toggleScope, { passive: false });
+  if (!window.PointerEvent) {
+    el.btnScope.addEventListener('touchstart', toggleScope, { passive: false });
+    el.btnScope.addEventListener('mousedown', toggleScope);
+  }
+
   el.btnFire.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); attemptFire(); }, { passive: false });
   el.btnFire.addEventListener('mousedown', (e) => { e.stopPropagation(); attemptFire(); });
 
@@ -5567,6 +6160,7 @@ const PvpSystem = (() => {
   }
 
   function gameOver() {
+    resetScope();
     gameState = 'gameover';
     AudioSystem.playGameOver();
     el.gameoverTitle.textContent = 'GAME OVER';
@@ -5581,6 +6175,7 @@ const PvpSystem = (() => {
   function abortMission() {
     if (gameState !== 'playing') return;
     if (!window.confirm('ミッションを終了しますか?ここまでの進行は失われます。')) return;
+    resetScope();
     gameState = 'gameover';
     el.gameoverTitle.textContent = 'ミッション中断';
     const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
@@ -5612,6 +6207,7 @@ const PvpSystem = (() => {
   });
 
   function missionClear() {
+    resetScope();
     gameState = 'clear';
     AudioSystem.playClear();
     const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
@@ -5622,6 +6218,7 @@ const PvpSystem = (() => {
   }
 
   function backToTitle() {
+    resetScope();
     gameState = 'title';
     NetSystem.disconnect();
     stopScanner();
@@ -5711,6 +6308,7 @@ const PvpSystem = (() => {
     await runCalibration();
 
     startTime = performance.now();
+    resetScope();
     gameState = 'playing';
     el.btnQuitMission.classList.toggle('hidden', selectedMode !== 'solo');
     showScreen(el.hud);
@@ -6000,6 +6598,7 @@ const PvpSystem = (() => {
     await runCalibration();
 
     startTime = performance.now();
+    resetScope();
     gameState = 'playing';
     el.btnQuitMission.classList.add('hidden');
     showScreen(el.hud);
@@ -6038,6 +6637,7 @@ const PvpSystem = (() => {
 
   function endPvpMatch() {
     if (gameState !== 'playing') return;
+    resetScope();
     gameState = 'gameover'; // アニメーションループの更新を止めるための状態遷移
     const local = PvpSystem.getLocalScore();
     const remote = PvpSystem.getRemoteScore();
@@ -6075,6 +6675,7 @@ const PvpSystem = (() => {
     el.hudTopRight.classList.add('hidden');
     el.hudPvpScore.classList.remove('hidden');
 
+    resetScope();
     gameState = 'playing';
     showScreen(el.hud);
     updatePvpScoreHud();
@@ -6088,6 +6689,7 @@ const PvpSystem = (() => {
 
   function onPvpOpponentDisconnected() {
     if (gameState !== 'playing') return;
+    resetScope();
     gameState = 'gameover';
     el.pvpResultTitle.textContent = '接続が切れました';
     el.pvpResultTitle.style.color = 'var(--danger)';
@@ -6203,6 +6805,22 @@ const PvpSystem = (() => {
 
       updateSensorDebug();
 
+      // ---- スコープ(覗き撃ち) ----
+      // 覗くと視野角を狭めて拡大表示し、同時に視点感度を下げて細かく狙えるようにする。
+      // 感度を下げないと、拡大した分だけ画面上の動きが大きくなって狙えなくなる。
+      const scopeTarget = scoped ? 1 : 0;
+      if (scopeT !== scopeTarget) {
+        scopeT += (scopeTarget - scopeT) * (1 - Math.exp(-SCOPE_LERP * dt));
+        if (Math.abs(scopeTarget - scopeT) < 0.002) scopeT = scopeTarget;
+        camera.fov = FOV_NORMAL + (FOV_SCOPED - FOV_NORMAL) * scopeT;
+        camera.updateProjectionMatrix();
+        WeaponSystem.setAdsAmount(scopeT);
+        // 感度は拡大率に合わせて下げる(画面上での見かけの動きが変わらないようにする)
+        const zoom = Math.tan(THREE.MathUtils.degToRad(FOV_NORMAL / 2))
+          / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+        SensorSystem.setAimScale(1 / zoom);
+      }
+
       // ---- 移動 ----
       // 前後(足踏み/キー)と左右(横移動ボタン)を「速度ベクトル」として合成し、
       // 実際の速度をそこへ滑らかに補間する。
@@ -6221,13 +6839,16 @@ const PvpSystem = (() => {
       }
       if (keyState.forward) fwdSpeed = Math.max(fwdSpeed, PLAYER_SPEED);
       if (keyState.back) fwdSpeed -= PLAYER_SPEED;
+      // 覗いている間はゆっくり歩く
+      const scopeSlow = 1 - (1 - SCOPE_MOVE_RATIO) * scopeT;
+      fwdSpeed *= scopeSlow;
 
       // 左右方向の目標速度。走行中は前進速度に比例させ、走るほど大きく斜めに曲がれる。
       let latDir = 0;
       if (keyState.right) latDir += 1;
       if (keyState.left) latDir -= 1;
       const strafeSpeed = Math.max(PLAYER_SPEED * 0.6, Math.abs(fwdSpeed) * STRAFE_RATIO);
-      const latSpeed = latDir * (fwdSpeed > 0.01 ? strafeSpeed : PLAYER_SPEED);
+      const latSpeed = latDir * (fwdSpeed > 0.01 ? strafeSpeed : PLAYER_SPEED * scopeSlow);
 
       let targetX = forwardVec.x * fwdSpeed + rightVec.x * latSpeed;
       let targetZ = forwardVec.z * fwdSpeed + rightVec.z * latSpeed;
