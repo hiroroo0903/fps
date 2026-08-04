@@ -551,6 +551,17 @@ html, body {
     </button>
   </div>
 
+  <div id="stage-select" class="mode-select">
+    <button class="mode-card selected" data-stage="outpost">
+      <span class="mode-name">OUTPOST</span>
+      <span class="mode-desc">前哨基地。2Fデッキ・倉庫・ダクト</span>
+    </button>
+    <button class="mode-card" data-stage="rig">
+      <span class="mode-name">RIG</span>
+      <span class="mode-desc">掘削リグ。中央やぐらの小さな闘技場</span>
+    </button>
+  </div>
+
   <div id="difficulty-select" class="difficulty-select">
     <button class="diff-card" data-difficulty="easy">
       <span class="diff-name">イージー</span>
@@ -743,168 +754,327 @@ html, body {
 /* ==================== js/mapdata.js ==================== */
 // ============================================================
 // mapdata.js
-// 固定の手作りマップレイアウトをグリッドとして定義する。
-// グリッドは 26x26 (1マス4unit = 104x104unit)。0 = 壁, 1 = 床。
+// ステージ(マップ)のデータと、そこから派生する情報の管理。
 //
-// ---- 設計の考え方 ----
-// 「広くて平らな空間」を作らないことを最優先にしている。
-//   ・部屋は最大でも 7x4 程度。庭も塔・低い台・車両・壁の出っ張りで細かく分断する
-//   ・高さを 0 / 1.1 / 1.6 / 2.2 / 3.2 の5段階にして、どこにいても高低差が絡む
-//   ・WALL_BLOCK_CELLS で部屋の中に壁の出っ張りを作り、曲がり角を増やす
-//
-//   北西 A スタートルーム      北 B ビル1階      北東 C 東の部屋(L字)
-//   西   D 西の部屋            東 E 東の縦通路
-//   中央 F 長い直線通路(64unit。撃ち合い用のレーン)
-//   南西 H 南西の部屋          南 G 庭(塔・低い台で段差だらけ)  南東 I 東の庭(高台つき)
-//   高所 2Fデッキ+ベランダ(3.2m) / 見張り台(2.2m) / 低い台(1.1m, 1.6m)
-//   裏道 3本のダクト(1マス幅)。duct1は2Fデッキから飛び降りて入ることもできる
+// ---- ステージ制について ----
+// マップは STAGE_DEFS に複数定義し、setStage(id) で切り替える。
+// 切り替えると MAP_GRID や高さゾーンなどの派生データが作り直され、
+// game.js 側は buildLevel() で3Dのジオメトリを組み直す。
 //
 // ---- 高さについて ----
-// 高さは HEIGHT_ZONES で管理する。範囲は「セル番号の閉区間」で指定し、
+// 高さは heightZones で管理する。範囲は「セル番号の閉区間」で指定し、
 // 内部ではグリッド浮動小数座標の [gx0, gx1+1] × [gy0, gy1+1] として扱う。
 // ランプ(階段・スロープ)は axis で向きを明示し、区間の端から端まで連続的に変化する。
 // 見た目の階段もまったく同じ式で生成するため、
 // 「見えている段」と「実際に立てる高さ」が必ず一致する。
 // ============================================================
 
-const GRID_SIZE = 26;
 const CELL_SIZE = 4; // Three.js空間上の1マスのサイズ(unit)
 
 // 登れる段差の上限(unit)。これを超える差は登れない(飛び降りは可能)。
 // 高所の縁が自動的に「壁」として機能し、階段・スロープ以外から上に行けなくなる。
 const MAX_STEP_UP = 0.45;
 
-// 高さの段階
-const DECK_HEIGHT  = 3.2; // 2Fデッキ・ベランダ(壁と同じ高さ = ビルの屋上)
-const TOWER_HEIGHT = 2.2; // 見張り台。高すぎると上が有利になりすぎるため控えめ
-const LEDGE_HEIGHT = 1.6; // 東の庭の高台
-const PAD_HEIGHT   = 1.1; // 庭の低い台
+// 高さの段階(OUTPOSTステージ用)
+const DECK_HEIGHT  = 3.2;
+const TOWER_HEIGHT = 2.2;
+const LEDGE_HEIGHT = 1.6;
+const PAD_HEIGHT   = 1.1;
 
-// 部屋の矩形定義 [x, y, w, h]
-const ROOMS = [
-  { id: 'A', x: 2,  y: 2,  w: 5,  h: 4, name: 'スタートルーム' },
-  { id: 'B', x: 9,  y: 2,  w: 6,  h: 4, name: 'ビル1階' },
-  { id: 'C', x: 17, y: 2,  w: 7,  h: 4, name: '東の部屋' },
-  { id: 'D', x: 2,  y: 8,  w: 4,  h: 5, name: '西の部屋' },
-  { id: 'E', x: 20, y: 8,  w: 3,  h: 9, name: '東の縦通路' },
-  { id: 'F', x: 3,  y: 15, w: 16, h: 2, name: '長い直線通路' },
-  { id: 'G', x: 8,  y: 19, w: 11, h: 6, name: '庭' },
-  { id: 'H', x: 2,  y: 19, w: 5,  h: 5, name: '南西の部屋' },
-  { id: 'I', x: 20, y: 18, w: 5,  h: 6, name: '東の庭' },
-];
-
-// 通路の矩形定義(部屋同士をつなぐ。ここにドア枠が生成される)
-const CORRIDORS = [
-  { x: 7,  y: 3,  w: 2, h: 2 }, // A - B
-  { x: 3,  y: 6,  w: 2, h: 2 }, // A - D
-  { x: 15, y: 3,  w: 2, h: 2 }, // B - C
-  { x: 21, y: 6,  w: 2, h: 2 }, // C - E
-  { x: 18, y: 9,  w: 2, h: 2 }, // duct2の出口 - E
-  { x: 3,  y: 13, w: 2, h: 2 }, // D - F
-  { x: 19, y: 15, w: 1, h: 2 }, // F - E
-  { x: 12, y: 17, w: 2, h: 2 }, // F - G(庭)
-  { x: 4,  y: 17, w: 2, h: 2 }, // F - H
-  { x: 7,  y: 21, w: 1, h: 2 }, // H - G
-  { x: 19, y: 20, w: 1, h: 3 }, // G - I(倉庫の東側の搬入口)
-  { x: 21, y: 17, w: 2, h: 1 }, // E - I
-];
-
-// 裏ルート(ダクト): 1マス幅の細い近道。天井が低い
-const DUCTS = [
-  { x: 14, y: 6, w: 1, h: 9 },  // duct1: ビル1階B → 長い直線通路(2Fデッキから飛び降りても入れる)
-  { x: 18, y: 6, w: 1, h: 3 },  // duct2: C → 階段の下(東の縦通路を経由せずに降りられる)
-  { x: 24, y: 4, w: 1, h: 14 }, // duct3: C → 東の庭(マップ東端を縦断)
-  { x: 23, y: 17, w: 1, h: 1 }, // duct3の出口(東の庭の高台に直接は登れないので west へ回り込む)
-];
-
-// 高所エリア。MAP_GRID上は歩行可能として彫り、高さはHEIGHT_ZONESで管理する
-const ELEVATED_CORRIDORS = [
-  { x: 9,  y: 7,  w: 5, h: 6 }, // 2Fデッキ(ビルの屋上)
-  { x: 10, y: 13, w: 3, h: 2 }, // ベランダ(長い直線通路を見下ろす張り出し)
-  { x: 6,  y: 10, w: 3, h: 2 }, // 2Fへの階段(西の部屋Dから上がる)
-  { x: 15, y: 20, w: 3, h: 3 }, // 見張り台(庭の中央)
-  { x: 14, y: 21, w: 1, h: 1 }, // 見張り台への西のはしご段
-  { x: 18, y: 21, w: 1, h: 1 }, // 見張り台の東の降り口(反対側)
-  { x: 9,  y: 20, w: 3, h: 2 }, // 庭の低い台
-  { x: 12, y: 20, w: 1, h: 2 }, // 低い台へのスロープ
-  { x: 22, y: 18, w: 3, h: 2 }, // 東の庭の高台
-  { x: 22, y: 20, w: 3, h: 1 }, // 高台へのスロープ
-];
-
-// 高さゾーン。範囲はセル番号の閉区間
-const HEIGHT_ZONES = [
-  { id: 'deck',    type: 'flat', gx0: 9,  gy0: 7,  gx1: 13, gy1: 12, height: DECK_HEIGHT,
-    support: 'solid', railHeight: 1.05 },
-  { id: 'balcony', type: 'flat', gx0: 10, gy0: 13, gx1: 12, gy1: 14, height: DECK_HEIGHT,
-    support: 'solid', railHeight: 1.05, openSides: ['south', 'east', 'west'],
-    // 神殿風の列柱。手すりの代わりに柱が並び、その間から下を狙える
-    colonnade: { columnHeight: 2.9, spacing: 5.0, pediment: true } },
-  { id: 'stairs',  type: 'ramp', axis: 'x', gx0: 6,  gy0: 10, gx1: 8,  gy1: 11,
-    h0: 0, h1: DECK_HEIGHT, style: 'stairs' },
-  { id: 'tower',   type: 'flat', gx0: 15, gy0: 20, gx1: 17, gy1: 22, height: TOWER_HEIGHT,
-    support: 'container', railHeight: 0.9 },
-  { id: 'towerW',  type: 'ramp', axis: 'x', gx0: 14, gy0: 21, gx1: 14, gy1: 21,
-    h0: 0, h1: TOWER_HEIGHT, style: 'ladder' },
-  { id: 'towerE',  type: 'ramp', axis: 'x', gx0: 18, gy0: 21, gx1: 18, gy1: 21,
-    h0: TOWER_HEIGHT, h1: 0, style: 'ladder' },
-  { id: 'pad',     type: 'flat', gx0: 9,  gy0: 20, gx1: 11, gy1: 21, height: PAD_HEIGHT,
-    support: 'container', railHeight: 0.55 },
-  { id: 'padramp', type: 'ramp', axis: 'x', gx0: 12, gy0: 20, gx1: 12, gy1: 21,
-    h0: PAD_HEIGHT, h1: 0, style: 'ladder' },
-  { id: 'ledge',   type: 'flat', gx0: 22, gy0: 18, gx1: 24, gy1: 19, height: LEDGE_HEIGHT,
-    support: 'container', railHeight: 0.7, openSides: ['west'] },
-  { id: 'ledgeramp', type: 'ramp', axis: 'y', gx0: 22, gy0: 20, gx1: 24, gy1: 20,
-    h0: LEDGE_HEIGHT, h1: 0, style: 'ladder' },
-];
-
-// 部屋の中に置く壁の出っ張り。曲がり角を作り、平らで見通しの良い空間をなくす
-const WALL_BLOCK_CELLS = [
-  { gx: 20, gy: 2 }, { gx: 20, gy: 3 },  // 東の部屋CをL字にする
-  { gx: 12, gy: 2 },                      // ビル1階Bに柱状の仕切り
-  { gx: 4,  gy: 21 },                     // 南西の部屋Hに曲がり角
-  { gx: 9,  gy: 22 }, { gx: 9,  gy: 23 }, // 庭の西側の仕切り
-  { gx: 14, gy: 24 },                     // 庭の南の仕切り
-  { gx: 13, gy: 19 }, { gx: 13, gy: 23 },                     // 倉庫の西壁(y20-22が搬入口)
-  { gx: 15, gy: 24 }, { gx: 16, gy: 24 }, { gx: 17, gy: 24 }, { gx: 18, gy: 24 }, // 倉庫の南壁
-  { gx: 3,  gy: 10 },                     // 西の部屋D
-];
-
-// 遮蔽物(木箱)。視線と移動を遮る
-const OBSTACLE_CELLS = [
-  { gx: 5,  gy: 4 },  { gx: 10, gy: 4 }, { gx: 14, gy: 2 },
-  { gx: 18, gy: 4 },  { gx: 22, gy: 3 }, { gx: 23, gy: 5 },
-  { gx: 5,  gy: 9 },  { gx: 2,  gy: 12 },
-  { gx: 21, gy: 10 }, { gx: 20, gy: 13 }, { gx: 22, gy: 16 },
-  // 長い直線通路(交互に置いて逃げ場を作る)
-  { gx: 6,  gy: 15 }, { gx: 9,  gy: 16 }, { gx: 12, gy: 16 }, { gx: 17, gy: 16 },
-  { gx: 18, gy: 15 },
-  // 南西の部屋
-  { gx: 2,  gy: 19 }, { gx: 6,  gy: 23 },
-  // 庭
-  { gx: 11, gy: 22 }, { gx: 12, gy: 19 }, { gx: 15, gy: 19 }, { gx: 15, gy: 23 },
-  { gx: 17, gy: 19 },
-  // 東の庭
-  { gx: 20, gy: 23 }, { gx: 24, gy: 23 },
-];
-
-// 建物の外殻(壁の上部の帯 + 天井)。ここで囲われた範囲は「屋内」になる。
-// 外周のセルは通常の壁として描画されるので、その上に帯と天井を足して屋内らしくする。
-const BUILDINGS = [
-  {
-    id: 'warehouse', name: '倉庫(見張り台のある建物)',
-    gx0: 13, gy0: 18, gx1: 19, gy1: 24,       // 外周(壁のライン)
-    inner: { gx0: 14, gy0: 19, gx1: 18, gy1: 23 }, // 屋内の床
-    wallTop: 4.9, roofThickness: 0.4,
-    color: 0x8b8676, roofColor: 0x5d5850, trussColor: 0x4a4640,
+const STAGE_DEFS = {
+  // ============================================================
+  // ステージ1「OUTPOST」: これまでの前哨基地マップ
+  // ============================================================
+  outpost: {
+    name: 'OUTPOST(前哨基地)',
+    desc: '2Fデッキ・倉庫・長い通路・ダクトのある基地。ソロ/チーム戦の標準ステージ',
+    gridSize: 26,
+    theme: {
+      floor: { base: '#e9e4d2', alt: '#dcd6bf', line: '#b9b39a', grime: 'rgba(0,0,0,0.04)' },
+      wall: { base: '#b5551f', panel: 'rgba(0,0,0,0.18)', trim: 'rgba(0,0,0,0.22)' },
+      wallStyle: 'corrugated',
+      skyTop: 0x6fa8dc, skyBottom: 0xe8ecdf,
+      fog: 0xcfe0d8, fogNear: 25, fogFar: 95,
+      parapetColor: 0x8f8879,
+    },
+    rooms: [
+      { id: 'A', x: 2,  y: 2,  w: 5,  h: 4, name: 'スタートルーム' },
+      { id: 'B', x: 9,  y: 2,  w: 6,  h: 4, name: 'ビル1階' },
+      { id: 'C', x: 17, y: 2,  w: 7,  h: 4, name: '東の部屋' },
+      { id: 'D', x: 2,  y: 8,  w: 4,  h: 5, name: '西の部屋' },
+      { id: 'E', x: 20, y: 8,  w: 3,  h: 9, name: '東の縦通路' },
+      { id: 'F', x: 3,  y: 15, w: 16, h: 2, name: '長い直線通路' },
+      { id: 'G', x: 8,  y: 19, w: 11, h: 6, name: '庭' },
+      { id: 'H', x: 2,  y: 19, w: 5,  h: 5, name: '南西の部屋' },
+      { id: 'I', x: 20, y: 18, w: 5,  h: 6, name: '東の庭' },
+    ],
+    corridors: [
+      { x: 7,  y: 3,  w: 2, h: 2 }, // A - B
+      { x: 3,  y: 6,  w: 2, h: 2 }, // A - D
+      { x: 15, y: 3,  w: 2, h: 2 }, // B - C
+      { x: 21, y: 6,  w: 2, h: 2 }, // C - E
+      { x: 18, y: 9,  w: 2, h: 2 }, // duct2の出口 - E
+      { x: 3,  y: 13, w: 2, h: 2 }, // D - F
+      { x: 19, y: 15, w: 1, h: 2 }, // F - E
+      { x: 12, y: 17, w: 2, h: 2 }, // F - G(庭)
+      { x: 4,  y: 17, w: 2, h: 2 }, // F - H
+      { x: 7,  y: 21, w: 1, h: 2 }, // H - G
+      { x: 19, y: 20, w: 1, h: 3 }, // G - I(倉庫の東側の搬入口)
+      { x: 21, y: 17, w: 2, h: 1 }, // E - I
+    ],
+    ducts: [
+      { x: 14, y: 6, w: 1, h: 9 },  // duct1: ビル1階B → 長い直線通路(2Fデッキから飛び降りても入れる)
+      { x: 18, y: 6, w: 1, h: 3 },  // duct2: C → 階段の下(東の縦通路を経由せずに降りられる)
+      { x: 24, y: 4, w: 1, h: 14 }, // duct3: C → 東の庭(マップ東端を縦断)
+      { x: 23, y: 17, w: 1, h: 1 }, // duct3の出口(東の庭の高台に直接は登れないので west へ回り込む)
+    ],
+    elevated: [
+      { x: 9,  y: 7,  w: 5, h: 6 }, // 2Fデッキ(ビルの屋上)
+      { x: 10, y: 13, w: 3, h: 2 }, // ベランダ(長い直線通路を見下ろす張り出し)
+      { x: 6,  y: 10, w: 3, h: 2 }, // 2Fへの階段(西の部屋Dから上がる)
+      { x: 15, y: 20, w: 3, h: 3 }, // 見張り台(庭の中央)
+      { x: 14, y: 21, w: 1, h: 1 }, // 見張り台への西のはしご段
+      { x: 18, y: 21, w: 1, h: 1 }, // 見張り台の東の降り口(反対側)
+      { x: 9,  y: 20, w: 3, h: 2 }, // 庭の低い台
+      { x: 12, y: 20, w: 1, h: 2 }, // 低い台へのスロープ
+      { x: 22, y: 18, w: 3, h: 2 }, // 東の庭の高台
+      { x: 22, y: 20, w: 3, h: 1 }, // 高台へのスロープ
+    ],
+    heightZones: [
+      { id: 'deck',    type: 'flat', gx0: 9,  gy0: 7,  gx1: 13, gy1: 12, height: DECK_HEIGHT,
+        support: 'solid', railHeight: 1.05 },
+      { id: 'balcony', type: 'flat', gx0: 10, gy0: 13, gx1: 12, gy1: 14, height: DECK_HEIGHT,
+        support: 'solid', railHeight: 1.05, openSides: ['south', 'east', 'west'],
+        // 神殿風の列柱。手すりの代わりに柱が並び、その間から下を狙える
+        colonnade: { columnHeight: 2.9, spacing: 5.0, pediment: true } },
+      { id: 'stairs',  type: 'ramp', axis: 'x', gx0: 6,  gy0: 10, gx1: 8,  gy1: 11,
+        h0: 0, h1: DECK_HEIGHT, style: 'stairs' },
+      { id: 'tower',   type: 'flat', gx0: 15, gy0: 20, gx1: 17, gy1: 22, height: TOWER_HEIGHT,
+        support: 'container', railHeight: 0.9 },
+      { id: 'towerW',  type: 'ramp', axis: 'x', gx0: 14, gy0: 21, gx1: 14, gy1: 21,
+        h0: 0, h1: TOWER_HEIGHT, style: 'ladder' },
+      { id: 'towerE',  type: 'ramp', axis: 'x', gx0: 18, gy0: 21, gx1: 18, gy1: 21,
+        h0: TOWER_HEIGHT, h1: 0, style: 'ladder' },
+      { id: 'pad',     type: 'flat', gx0: 9,  gy0: 20, gx1: 11, gy1: 21, height: PAD_HEIGHT,
+        support: 'container', railHeight: 0.55 },
+      { id: 'padramp', type: 'ramp', axis: 'x', gx0: 12, gy0: 20, gx1: 12, gy1: 21,
+        h0: PAD_HEIGHT, h1: 0, style: 'ladder' },
+      { id: 'ledge',   type: 'flat', gx0: 22, gy0: 18, gx1: 24, gy1: 19, height: LEDGE_HEIGHT,
+        support: 'container', railHeight: 0.7, openSides: ['west'] },
+      { id: 'ledgeramp', type: 'ramp', axis: 'y', gx0: 22, gy0: 20, gx1: 24, gy1: 20,
+        h0: LEDGE_HEIGHT, h1: 0, style: 'ladder' },
+    ],
+    wallBlocks: [
+      { gx: 20, gy: 2 }, { gx: 20, gy: 3 },  // 東の部屋CをL字にする
+      { gx: 12, gy: 2 },                      // ビル1階Bに柱状の仕切り
+      { gx: 4,  gy: 21 },                     // 南西の部屋Hに曲がり角
+      { gx: 9,  gy: 22 }, { gx: 9,  gy: 23 }, // 庭の西側の仕切り
+      { gx: 14, gy: 24 },                     // 庭の南の仕切り
+      { gx: 13, gy: 19 }, { gx: 13, gy: 23 },                     // 倉庫の西壁(y20-22が搬入口)
+      { gx: 15, gy: 24 }, { gx: 16, gy: 24 }, { gx: 17, gy: 24 }, { gx: 18, gy: 24 }, // 倉庫の南壁
+      { gx: 3,  gy: 10 },                     // 西の部屋D
+    ],
+    obstacles: [
+      { gx: 5,  gy: 4 },  { gx: 10, gy: 4 }, { gx: 14, gy: 2 },
+      { gx: 18, gy: 4 },  { gx: 22, gy: 3 }, { gx: 23, gy: 5 },
+      { gx: 5,  gy: 9 },  { gx: 2,  gy: 12 },
+      { gx: 21, gy: 10 }, { gx: 20, gy: 13 }, { gx: 22, gy: 16 },
+      // 長い直線通路(交互に置いて逃げ場を作る)
+      { gx: 6,  gy: 15 }, { gx: 9,  gy: 16 }, { gx: 12, gy: 16 }, { gx: 17, gy: 16 },
+      { gx: 18, gy: 15 },
+      // 南西の部屋
+      { gx: 2,  gy: 19 }, { gx: 6,  gy: 23 },
+      // 庭
+      { gx: 11, gy: 22 }, { gx: 12, gy: 19 }, { gx: 15, gy: 19 }, { gx: 15, gy: 23 },
+      { gx: 17, gy: 19 },
+      // 東の庭
+      { gx: 20, gy: 23 }, { gx: 24, gy: 23 },
+    ],
+    vehicles: [
+      { kind: 'truck', cells: [{ gx: 10, gy: 24 }, { gx: 11, gy: 24 }], color: 0x5a6058 },
+      { kind: 'car',   cells: [{ gx: 9,  gy: 19 }, { gx: 10, gy: 19 }], color: 0x7a2828 },
+      { kind: 'car',   cells: [{ gx: 20, gy: 22 }, { gx: 21, gy: 22 }], color: 0x2c4a6a },
+    ],
+    buildings: [
+      {
+        id: 'warehouse', name: '倉庫(見張り台のある建物)',
+        gx0: 13, gy0: 18, gx1: 19, gy1: 24,       // 外周(壁のライン)
+        inner: { gx0: 14, gy0: 19, gx1: 18, gy1: 23 }, // 屋内の床
+        wallTop: 4.9, roofThickness: 0.4,
+        color: 0x8b8676, roofColor: 0x5d5850, trussColor: 0x4a4640,
+      },
+    ],
+    fences: [],
+    playerStart: { gx: 3, gy: 3 },
+    pvpHost: { gx: 3, gy: 3 },
+    pvpGuest: { gx: 22, gy: 23 },
+    enemySpawns: [
+      { type: 'grunt',      gx: 11, gy: 3,  room: 'B' },
+      { type: 'rusher',     gx: 3,  gy: 11, room: 'D' },
+      { type: 'bruiser',    gx: 11, gy: 16, room: 'F' },
+      { type: 'sniper',     gx: 11, gy: 14, room: 'ベランダ' },
+      { type: 'gunner',     gx: 22, gy: 4,  room: 'C' },
+      { type: 'heavy',      gx: 21, gy: 14, room: 'E' },
+      { type: 'scout',      gx: 11, gy: 20, room: '庭の低い台' },
+      { type: 'guard',      gx: 4,  gy: 22, room: 'H' },
+      { type: 'skirmisher', gx: 16, gy: 21, room: '見張り台' },
+      { type: 'juggernaut', gx: 16, gy: 23, room: '倉庫内' },
+    ],
+    teamEnemySpawns: [
+      { type: 'grunt',   gx: 22, gy: 4,  room: 'C' },
+      { type: 'bruiser', gx: 16, gy: 15, room: 'F' },
+      { type: 'sniper',  gx: 11, gy: 9,  room: '2Fデッキ' },
+      { type: 'gunner',  gx: 21, gy: 12, room: 'E' },
+      { type: 'scout',   gx: 23, gy: 19, room: '東の庭の高台' },
+    ],
+    teamAllySpawns: [
+      { type: 'assault',  gx: 2, gy: 2 },
+      { type: 'scout',    gx: 4, gy: 2 },
+      { type: 'heavy',    gx: 2, gy: 4 },
+      { type: 'marksman', gx: 6, gy: 5 },
+    ],
   },
-];
 
-// 車両(景観・遮蔽物)
-const VEHICLES = [
-  { kind: 'truck', cells: [{ gx: 10, gy: 24 }, { gx: 11, gy: 24 }], color: 0x5a6058 },
-  { kind: 'car',   cells: [{ gx: 9,  gy: 19 }, { gx: 10, gy: 19 }], color: 0x7a2828 },
-  { kind: 'car',   cells: [{ gx: 20, gy: 22 }, { gx: 21, gy: 22 }], color: 0x2c4a6a },
-];
+  // ============================================================
+  // ステージ2「RIG」: 海上の掘削リグを模した1対1向けの小さな闘技場。
+  // 中央にやぐら(デリック)、北西に青い手すりの屋上テラス、東に波板屋根の建屋、
+  // 周囲はクリーム色の壁に細い窓が並ぶ。地面はベージュのタイル。
+  // ============================================================
+  rig: {
+    name: 'RIG(掘削リグ)',
+    desc: '1対1向けの小さな闘技場。中央のやぐらと屋上テラスの取り合い',
+    gridSize: 24,
+    theme: {
+      floor: { base: '#ddd7c6', alt: '#cec7b3', line: '#a9a390', grime: 'rgba(70,60,45,0.05)' },
+      wall: { base: '#e6e0cd', panel: '#d5cebb', trim: '#9c9683' },
+      wallStyle: 'facade',
+      skyTop: 0x7fb2dd, skyBottom: 0xdfe8ee,
+      fog: 0xd6dfe2, fogNear: 30, fogFar: 130,
+      parapetColor: 0x9aa0a2,
+      // 周囲を囲む2階建てのビル壁。屋上には手すりが回る
+      perimeter: { top: 6.6, color: 0xe6e0cd, capColor: 0xa8a89e, rail: true },
+    },
+    // ヤード(リグの甲板)。構造物は WALL_BLOCK と高所ゾーンで作る
+    rooms: [
+      { id: 'Y', x: 2, y: 2, w: 20, h: 20, name: '甲板' },
+    ],
+    corridors: [],
+    ducts: [],
+    elevated: [
+      { x: 10, y: 10, w: 4, h: 3 }, // 中央やぐらの床
+      { x: 12, y: 13, w: 1, h: 2 }, // やぐらへの階段(南)
+      { x: 4,  y: 3,  w: 5, h: 4 }, // 北西の屋上テラス
+      { x: 9,  y: 4,  w: 3, h: 2 }, // テラスへの外階段(東)
+      { x: 4,  y: 16, w: 3, h: 2 }, // 南西のコンテナ足場
+      { x: 7,  y: 16, w: 1, h: 2 }, // 足場へのスロープ
+      { x: 17, y: 17, w: 3, h: 2 }, // 南東の足場
+      { x: 17, y: 19, w: 3, h: 1 }, // 南東の足場へのスロープ
+    ],
+    heightZones: [
+      { id: 'derrick', type: 'flat', gx0: 10, gy0: 10, gx1: 13, gy1: 12, height: 3.6,
+        support: 'lattice', railHeight: 1.0, openSides: ['north'], derrick: true },
+      { id: 'derrickStair', type: 'ramp', axis: 'y', gx0: 12, gy0: 13, gx1: 12, gy1: 14,
+        h0: 3.6, h1: 0, style: 'stairs' },
+      { id: 'terrace', type: 'flat', gx0: 4, gy0: 3, gx1: 8, gy1: 6, height: 3.2,
+        support: 'facade', railHeight: 1.0, railStyle: 'baluster', openSides: ['south'] },
+      { id: 'terraceStair', type: 'ramp', axis: 'x', gx0: 9, gy0: 4, gx1: 11, gy1: 5,
+        h0: 3.2, h1: 0, style: 'openTread' },
+      { id: 'padSW', type: 'flat', gx0: 4, gy0: 16, gx1: 6, gy1: 17, height: 1.25,
+        support: 'container', railHeight: 0.5 },
+      { id: 'padSWramp', type: 'ramp', axis: 'x', gx0: 7, gy0: 16, gx1: 7, gy1: 17,
+        h0: 1.25, h1: 0, style: 'ladder' },
+      { id: 'padSE', type: 'flat', gx0: 17, gy0: 17, gx1: 19, gy1: 18, height: 1.25,
+        support: 'container', railHeight: 0.5 },
+      { id: 'padSEramp', type: 'ramp', axis: 'y', gx0: 17, gy0: 19, gx1: 19, gy1: 19,
+        h0: 1.25, h1: 0, style: 'ladder' },
+    ],
+    // 東の建屋(波板屋根・屋内)の壁。西側と南側に開口部を残す
+    wallBlocks: [
+      { gx: 16, gy: 8 }, { gx: 16, gy: 9 }, { gx: 16, gy: 10 },
+      { gx: 16, gy: 12 }, { gx: 16, gy: 13 }, { gx: 16, gy: 14 },
+      { gx: 17, gy: 8 }, { gx: 18, gy: 8 }, { gx: 19, gy: 8 }, { gx: 20, gy: 8 }, { gx: 21, gy: 8 },
+      { gx: 17, gy: 14 }, { gx: 18, gy: 14 }, { gx: 20, gy: 14 }, { gx: 21, gy: 14 },
+      // 甲板を区切る短い壁(曲がり角づくり)
+      { gx: 8,  gy: 10 }, { gx: 8,  gy: 11 },
+      { gx: 5,  gy: 12 },
+      { gx: 12, gy: 6 },  { gx: 13, gy: 6 },
+      { gx: 9,  gy: 18 }, { gx: 10, gy: 18 },
+    ],
+    buildings: [
+      { id: 'shed', name: '波板屋根の建屋',
+        gx0: 16, gy0: 8, gx1: 22, gy1: 14,
+        inner: { gx0: 17, gy0: 9, gx1: 21, gy1: 13 },
+        wallTop: 4.4, roofThickness: 0.3, roofStyle: 'corrugated',
+        color: 0xd9d3c0, roofColor: 0x8d949a, trussColor: 0x59524a },
+    ],
+    obstacles: [
+      { gx: 3,  gy: 9,  kind: 'tarp' },
+      { gx: 6,  gy: 9,  kind: 'barrels' },
+      { gx: 3,  gy: 14, kind: 'container' },
+      { gx: 9,  gy: 8,  kind: 'tarp' },
+      { gx: 14, gy: 4,  kind: 'container' },
+      { gx: 17, gy: 4,  kind: 'tarp' },
+      { gx: 19, gy: 3,  kind: 'barrels' },
+      { gx: 20, gy: 11, kind: 'crate' },
+      { gx: 12, gy: 17, kind: 'tarp' },
+      { gx: 14, gy: 20, kind: 'container' },
+      { gx: 8,  gy: 20, kind: 'barrels' },
+      { gx: 20, gy: 20, kind: 'tarp' },
+      { gx: 5,  gy: 19, kind: 'crate' },
+      { gx: 15, gy: 15, kind: 'concrete' },
+      { gx: 9,  gy: 14, kind: 'concrete' },
+    ],
+    vehicles: [],
+    // 金網フェンス(視線は通るが雰囲気づけ)。グリッド境界に沿った線分
+    fences: [
+      { gx0: 2, gy0: 12, gx1: 5,  gy1: 12 },
+      { gx0: 14, gy0: 7, gx1: 16, gy1: 7 },
+      { gx0: 11, gy0: 20, gx1: 14, gy1: 20 },
+      { gx0: 21, gy0: 15, gx1: 21, gy1: 18 },
+    ],
+    playerStart: { gx: 3, gy: 20 },
+    pvpHost:     { gx: 3, gy: 20 },
+    pvpGuest:    { gx: 20, gy: 3 },
+    enemySpawns: [
+      { type: 'grunt',      gx: 12, gy: 11, room: 'やぐら' },
+      { type: 'rusher',     gx: 6,  gy: 4,  room: '屋上テラス' },
+      { type: 'bruiser',    gx: 19, gy: 11, room: '建屋' },
+      { type: 'sniper',     gx: 5,  gy: 17, room: '南西の足場' },
+      { type: 'gunner',     gx: 18, gy: 17, room: '南東の足場' },
+      { type: 'heavy',      gx: 12, gy: 20, room: '甲板南' },
+      { type: 'scout',      gx: 4,  gy: 11, room: '甲板西' },
+      { type: 'guard',      gx: 19, gy: 5,  room: '甲板北東' },
+      { type: 'skirmisher', gx: 11, gy: 4,  room: '甲板北' },
+      { type: 'juggernaut', gx: 16, gy: 20, room: '甲板南東' },
+    ],
+    teamEnemySpawns: [
+      { type: 'grunt',   gx: 19, gy: 5,  room: '甲板北東' },
+      { type: 'bruiser', gx: 19, gy: 11, room: '建屋' },
+      { type: 'sniper',  gx: 12, gy: 11, room: 'やぐら' },
+      { type: 'gunner',  gx: 18, gy: 17, room: '南東の足場' },
+      { type: 'scout',   gx: 16, gy: 20, room: '甲板南東' },
+    ],
+    teamAllySpawns: [
+      { type: 'assault',  gx: 3, gy: 19 },
+      { type: 'scout',    gx: 4, gy: 20 },
+      { type: 'heavy',    gx: 3, gy: 21 },
+      { type: 'marksman', gx: 5, gy: 20 },
+    ],
+  },
+};
+
+const STAGE_IDS = Object.keys(STAGE_DEFS);
+
+// ---- 現在のステージから作られる派生データ ----
+let currentStageId = null;
+let STAGE = null;
+let GRID_SIZE = 26;
+let ROOMS = [], CORRIDORS = [], DUCTS = [], ELEVATED_CORRIDORS = [], HEIGHT_ZONES = [];
+let WALL_BLOCK_CELLS = [], OBSTACLE_CELLS = [], VEHICLES = [], BUILDINGS = [], FENCES = [];
+let MAP_GRID = [], ELEVATED_CELLS = new Set(), DUCT_CELLS = new Set(), DOORWAYS = [];
+let PLAYER_START = { gx: 1, gy: 1 };
+let PVP_SPAWN_HOST = { gx: 1, gy: 1 }, PVP_SPAWN_GUEST = { gx: 1, gy: 1 };
+let ENEMY_SPAWNS = [], TEAM_ENEMY_SPAWNS = [], TEAM_ALLY_SPAWNS = [];
 
 function buildGrid() {
   const grid = [];
@@ -924,26 +1094,79 @@ function buildGrid() {
   CORRIDORS.forEach(c => carve(c.x, c.y, c.w, c.h));
   DUCTS.forEach(c => carve(c.x, c.y, c.w, c.h));
   ELEVATED_CORRIDORS.forEach(c => carve(c.x, c.y, c.w, c.h));
+  // 壁の出っ張り・遮蔽物・車両は通行不可にする
+  WALL_BLOCK_CELLS.forEach(o => { grid[o.gy][o.gx] = 0; });
+  OBSTACLE_CELLS.forEach(o => { grid[o.gy][o.gx] = 0; });
+  VEHICLES.forEach(v => v.cells.forEach(c => { grid[c.gy][c.gx] = 0; }));
   return grid;
 }
 
-const MAP_GRID = buildGrid();
+// ドア開口部(部屋と通路が接する境界)を矩形の隣接関係から自動算出する
+function computeDoorways() {
+  const doors = [];
+  CORRIDORS.forEach((c) => {
+    ROOMS.forEach((r) => {
+      if (c.x + c.w === r.x) {
+        const y0 = Math.max(c.y, r.y), y1 = Math.min(c.y + c.h, r.y + r.h);
+        if (y1 > y0) doors.push({ axis: 'x', bx: r.x, y0, y1, roomId: r.id });
+      }
+      if (r.x + r.w === c.x) {
+        const y0 = Math.max(c.y, r.y), y1 = Math.min(c.y + c.h, r.y + r.h);
+        if (y1 > y0) doors.push({ axis: 'x', bx: c.x, y0, y1, roomId: r.id });
+      }
+      if (c.y + c.h === r.y) {
+        const x0 = Math.max(c.x, r.x), x1 = Math.min(c.x + c.w, r.x + r.w);
+        if (x1 > x0) doors.push({ axis: 'z', by: r.y, x0, x1, roomId: r.id });
+      }
+      if (r.y + r.h === c.y) {
+        const x0 = Math.max(c.x, r.x), x1 = Math.min(c.x + c.w, r.x + r.w);
+        if (x1 > x0) doors.push({ axis: 'z', by: c.y, x0, x1, roomId: r.id });
+      }
+    });
+  });
+  return doors;
+}
 
-// 高所エリアに属するセルの集合(描画側で参照する)
-const ELEVATED_CELLS = new Set();
-ELEVATED_CORRIDORS.forEach((c) => {
-  for (let iy = c.y; iy < c.y + c.h; iy++) {
-    for (let ix = c.x; ix < c.x + c.w; ix++) ELEVATED_CELLS.add(`${ix},${iy}`);
-  }
-});
+// ステージを切り替える。派生データをすべて作り直す
+function setStage(id) {
+  const def = STAGE_DEFS[id] || STAGE_DEFS[STAGE_IDS[0]];
+  STAGE = def;
+  currentStageId = STAGE_DEFS[id] ? id : STAGE_IDS[0];
+  GRID_SIZE = def.gridSize;
+  ROOMS = def.rooms;
+  CORRIDORS = def.corridors;
+  DUCTS = def.ducts;
+  ELEVATED_CORRIDORS = def.elevated;
+  HEIGHT_ZONES = def.heightZones;
+  WALL_BLOCK_CELLS = def.wallBlocks;
+  OBSTACLE_CELLS = def.obstacles;
+  VEHICLES = def.vehicles || [];
+  BUILDINGS = def.buildings || [];
+  FENCES = def.fences || [];
+  PLAYER_START = def.playerStart;
+  PVP_SPAWN_HOST = def.pvpHost;
+  PVP_SPAWN_GUEST = def.pvpGuest;
+  ENEMY_SPAWNS = def.enemySpawns;
+  TEAM_ENEMY_SPAWNS = def.teamEnemySpawns;
+  TEAM_ALLY_SPAWNS = def.teamAllySpawns;
 
-// ダクトのセル集合(低い天井の描画に使う)
-const DUCT_CELLS = new Set();
-DUCTS.forEach((c) => {
-  for (let iy = c.y; iy < c.y + c.h; iy++) {
-    for (let ix = c.x; ix < c.x + c.w; ix++) DUCT_CELLS.add(`${ix},${iy}`);
-  }
-});
+  MAP_GRID = buildGrid();
+
+  ELEVATED_CELLS = new Set();
+  ELEVATED_CORRIDORS.forEach((c) => {
+    for (let iy = c.y; iy < c.y + c.h; iy++) {
+      for (let ix = c.x; ix < c.x + c.w; ix++) ELEVATED_CELLS.add(`${ix},${iy}`);
+    }
+  });
+  DUCT_CELLS = new Set();
+  DUCTS.forEach((c) => {
+    for (let iy = c.y; iy < c.y + c.h; iy++) {
+      for (let ix = c.x; ix < c.x + c.w; ix++) DUCT_CELLS.add(`${ix},${iy}`);
+    }
+  });
+  DOORWAYS = computeDoorways();
+  return currentStageId;
+}
 
 // 高さゾーンの浮動小数範囲(セル番号の閉区間 → [gx0, gx1+1] の区間)
 function zoneBoundsGrid(zone) {
@@ -975,77 +1198,6 @@ function getGroundHeightAtGrid(gx, gy) {
 function getGroundHeightAt(worldX, worldZ) {
   return getGroundHeightAtGrid(worldX / CELL_SIZE + GRID_SIZE / 2, worldZ / CELL_SIZE + GRID_SIZE / 2);
 }
-
-// 壁の出っ張り・遮蔽物・車両の区画を通行不可にする
-WALL_BLOCK_CELLS.forEach((o) => { MAP_GRID[o.gy][o.gx] = 0; });
-OBSTACLE_CELLS.forEach((o) => { MAP_GRID[o.gy][o.gx] = 0; });
-VEHICLES.forEach((v) => { v.cells.forEach((c) => { MAP_GRID[c.gy][c.gx] = 0; }); });
-
-// ドア開口部(部屋と通路が接する境界)を矩形の隣接関係から自動算出する
-function computeDoorways() {
-  const doors = [];
-  CORRIDORS.forEach((c) => {
-    ROOMS.forEach((r) => {
-      if (c.x + c.w === r.x) {
-        const y0 = Math.max(c.y, r.y), y1 = Math.min(c.y + c.h, r.y + r.h);
-        if (y1 > y0) doors.push({ axis: 'x', bx: r.x, y0, y1, roomId: r.id });
-      }
-      if (r.x + r.w === c.x) {
-        const y0 = Math.max(c.y, r.y), y1 = Math.min(c.y + c.h, r.y + r.h);
-        if (y1 > y0) doors.push({ axis: 'x', bx: c.x, y0, y1, roomId: r.id });
-      }
-      if (c.y + c.h === r.y) {
-        const x0 = Math.max(c.x, r.x), x1 = Math.min(c.x + c.w, r.x + r.w);
-        if (x1 > x0) doors.push({ axis: 'z', by: r.y, x0, x1, roomId: r.id });
-      }
-      if (r.y + r.h === c.y) {
-        const x0 = Math.max(c.x, r.x), x1 = Math.min(c.x + c.w, r.x + r.w);
-        if (x1 > x0) doors.push({ axis: 'z', by: c.y, x0, x1, roomId: r.id });
-      }
-    });
-  });
-  return doors;
-}
-
-const DOORWAYS = computeDoorways();
-
-// プレイヤー開始位置(スタートルームA)
-const PLAYER_START = { gx: 3, gy: 3 };
-
-// 対戦モード(2人)用のスポーン地点。ゲストは東の庭(マップの反対側)
-const PVP_SPAWN_HOST = { gx: 3, gy: 3 };
-const PVP_SPAWN_GUEST = { gx: 22, gy: 23 };
-
-// 敵スポーン定義: 10種類、各1体。高さの違う場所に散らす
-const ENEMY_SPAWNS = [
-  { type: 'grunt',      gx: 11, gy: 3,  room: 'B' },
-  { type: 'rusher',     gx: 3,  gy: 11, room: 'D' },
-  { type: 'bruiser',    gx: 11, gy: 16, room: 'F' },
-  { type: 'sniper',     gx: 11, gy: 14, room: 'ベランダ' },
-  { type: 'gunner',     gx: 22, gy: 4,  room: 'C' },
-  { type: 'heavy',      gx: 21, gy: 14, room: 'E' },
-  { type: 'scout',      gx: 11, gy: 20, room: '庭の低い台' },
-  { type: 'guard',      gx: 4,  gy: 22, room: 'H' },
-  { type: 'skirmisher', gx: 16, gy: 21, room: '見張り台' },
-  { type: 'juggernaut', gx: 16, gy: 23, room: '倉庫内' },
-];
-
-// --- チーム戦モード(疑似5vs5)用のスポーン ---
-const TEAM_ENEMY_SPAWNS = [
-  { type: 'grunt',   gx: 22, gy: 4,  room: 'C' },
-  { type: 'bruiser', gx: 16, gy: 15, room: 'F' },
-  { type: 'sniper',  gx: 11, gy: 9,  room: '2Fデッキ' },
-  { type: 'gunner',  gx: 21, gy: 12, room: 'E' },
-  { type: 'scout',   gx: 23, gy: 19, room: '東の庭の高台' },
-];
-
-// 味方チーム(AI、プレイヤーの周囲=スタートルームに配置)
-const TEAM_ALLY_SPAWNS = [
-  { type: 'assault',  gx: 2, gy: 2 },
-  { type: 'scout',    gx: 4, gy: 2 },
-  { type: 'heavy',    gx: 2, gy: 4 },
-  { type: 'marksman', gx: 6, gy: 5 },
-];
 
 function gridToWorld(gx, gy) {
   return {
@@ -1085,6 +1237,8 @@ function canTraverseGrid(gx0, gy0, gx1, gy1) {
   }
   return true;
 }
+
+setStage(STAGE_IDS[0]);
 
 
 /* ==================== js/pathfinding.js ==================== */
@@ -3162,6 +3316,7 @@ const PvpSystem = (() => {
   let onOpponentDisconnected = null;
   let onMatchEnd = null;
   let onRematchRequested = null;
+  let onStageSync = null;
 
   // ---- 相手キャラクターの描画(人間らしい配色のモデルを流用) ----
   let avatar = null;
@@ -3250,6 +3405,7 @@ const PvpSystem = (() => {
     onOpponentDisconnected = callbacks.onOpponentDisconnected;
     onMatchEnd = callbacks.onMatchEnd;
     onRematchRequested = callbacks.onRematchRequested;
+    onStageSync = callbacks.onStageSync;
 
     if (avatar) scene.remove(avatar);
     avatar = buildAvatar();
@@ -3288,6 +3444,10 @@ const PvpSystem = (() => {
       case 'death':
         localScore += 1; // 相手が力尽きた = 自分のスコア加算
         if (onDeathCredited) onDeathCredited();
+        break;
+      case 'stage':
+        // ホストが選んだステージに合わせる(両者で同じマップを使うため)
+        if (onStageSync) onStageSync(msg.id);
         break;
       case 'rematch':
         if (onRematchRequested) onRematchRequested();
@@ -3360,6 +3520,7 @@ const PvpSystem = (() => {
   return {
     init, update, handleMessage,
     sendLocalState, reportHit, reportDeath, raycastHit,
+    sendStage: (id) => NetSystem.send({ t: 'stage', id }),
     getLocalScore, getRemoteScore, getTimeRemaining, getIsHost,
     resetMatch, requestRematch,
     teardown,
@@ -3422,6 +3583,7 @@ const PvpSystem = (() => {
     gameoverStats: document.getElementById('gameover-stats'),
     gameoverTitle: document.getElementById('gameover-title'),
     btnQuitMission: document.getElementById('btn-quit-mission'),
+    stageSelect: document.getElementById('stage-select'),
     hudTools: document.getElementById('hud-tools'),
     btnRecenter: document.getElementById('btn-recenter'),
     btnSensorDebug: document.getElementById('btn-sensor-debug'),
@@ -3471,6 +3633,7 @@ const PvpSystem = (() => {
   let selectedWeapon = 'ak';
   let selectedDifficulty = 'normal';
   let selectedMode = 'solo'; // 'solo' | 'team' | 'pvp'
+  let selectedStage = STAGE_IDS[0];
   let gameState = 'title'; // title | playing | gameover | clear
   let sceneBuilt = false;
 
@@ -3551,11 +3714,18 @@ const PvpSystem = (() => {
     });
   });
 
-  // ---- シーン構築(初回のみ) ----
+  // ---- ステージ選択 ----
+  el.stageSelect.querySelectorAll('[data-stage]').forEach((card) => {
+    card.addEventListener('click', () => {
+      el.stageSelect.querySelectorAll('[data-stage]').forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+      selectedStage = card.dataset.stage;
+    });
+  });
+
+  // ---- シーン構築(初回のみ)。ステージのジオメトリは buildLevel() で作り直せる ----
   function buildScene() {
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xbcd6e8);
-    scene.fog = new THREE.Fog(0xcfe0d8, 25, 95);
 
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 170);
     camera.position.set(0, EYE_HEIGHT, 0);
@@ -3579,6 +3749,44 @@ const PvpSystem = (() => {
 
     scene.add(camera);
 
+    buildLevel();
+    WeaponSystem.init(camera);
+
+    raycaster = new THREE.Raycaster();
+    clock = new THREE.Clock();
+
+    window.addEventListener('resize', onResize);
+    sceneBuilt = true;
+  }
+
+  // ---- ステージのジオメトリを組み立てる(ステージ切り替えのたびに呼ぶ) ----
+  let levelGroup = null;
+  let builtStageId = null;
+
+  function disposeGroup(group) {
+    group.traverse((o) => {
+      if (!o.isMesh) return;
+      if (o.geometry) o.geometry.dispose();
+      const m = o.material;
+      if (Array.isArray(m)) m.forEach(x => x && x.dispose());
+      else if (m) m.dispose();
+    });
+  }
+
+  function buildLevel() {
+    if (levelGroup) { scene.remove(levelGroup); disposeGroup(levelGroup); }
+    levelGroup = new THREE.Group();
+    scene.add(levelGroup);
+    columnObstacles = [];
+    wallGroup = null;
+    // 前のステージの弾痕を消す
+    bulletHoles.forEach(bh => { scene.remove(bh.mesh); scene.remove(bh.scorch); });
+    bulletHoles = [];
+
+    const th = STAGE.theme;
+    scene.background = new THREE.Color(th.skyBottom);
+    scene.fog = new THREE.Fog(th.fog, th.fogNear, th.fogFar);
+
     buildSky();
     buildMap();
     buildDoorframes();
@@ -3587,15 +3795,17 @@ const PvpSystem = (() => {
     buildVehicles();
     buildElevatedStructures();
     buildEnclosures();
+    buildPerimeter();
     buildDuctProps();
+    buildFences();
     buildMinimapStatic();
-    WeaponSystem.init(camera);
+    builtStageId = currentStageId;
+  }
 
-    raycaster = new THREE.Raycaster();
-    clock = new THREE.Clock();
-
-    window.addEventListener('resize', onResize);
-    sceneBuilt = true;
+  // 選んだステージを反映する(必要ならジオメトリを作り直す)
+  function applySelectedStage() {
+    if (currentStageId !== selectedStage) setStage(selectedStage);
+    if (sceneBuilt && builtStageId !== currentStageId) buildLevel();
   }
 
   // ---- ミニマップ ----
@@ -3692,30 +3902,70 @@ const PvpSystem = (() => {
   }
 
   function buildFloorTexture() {
+    const t = STAGE.theme.floor;
     return makeCanvasTexture((ctx, s) => {
-      // 屋外基地の明るいタイル敷き地面(市松模様)
-      ctx.fillStyle = '#e9e4d2';
+      // タイル敷きの地面(市松模様)。色はステージのテーマから取る
+      ctx.fillStyle = t.base;
       ctx.fillRect(0, 0, s, s);
-      ctx.fillStyle = '#dcd6bf';
+      ctx.fillStyle = t.alt;
       ctx.fillRect(0, 0, s / 2, s / 2);
       ctx.fillRect(s / 2, s / 2, s / 2, s / 2);
-      ctx.strokeStyle = '#b9b39a';
+      ctx.strokeStyle = t.line;
       ctx.lineWidth = s * 0.025;
       ctx.strokeRect(0, 0, s, s);
-      ctx.fillStyle = 'rgba(0,0,0,0.04)';
-      for (let i = 0; i < 4; i++) {
+      ctx.beginPath();
+      ctx.moveTo(s / 2, 0); ctx.lineTo(s / 2, s);
+      ctx.moveTo(0, s / 2); ctx.lineTo(s, s / 2);
+      ctx.lineWidth = s * 0.012; ctx.stroke();
+      ctx.fillStyle = t.grime;
+      for (let i = 0; i < 5; i++) {
         ctx.fillRect(Math.random() * s, Math.random() * s, s * 0.14, s * 0.14);
       }
     });
   }
 
   function buildWallTexture() {
+    const t = STAGE.theme.wall;
+    if (STAGE.theme.wallStyle === 'facade') {
+      // クリーム色のコンクリート外壁。細い窓が横一列に並び、上端は笠木(パラペット)
+      return makeCanvasTexture((ctx, s) => {
+        ctx.fillStyle = t.base;
+        ctx.fillRect(0, 0, s, s);
+        // 上端のパラペット
+        ctx.fillStyle = t.trim;
+        ctx.fillRect(0, 0, s, s * 0.11);
+        ctx.fillStyle = 'rgba(0,0,0,0.12)';
+        ctx.fillRect(0, s * 0.11, s, s * 0.02);
+        // 窓(横長の細い窓が等間隔に並ぶ)
+        const wy = s * 0.2, wh = s * 0.16;
+        for (let i = 0; i < 3; i++) {
+          const wx = s * (0.11 + i * 0.3);
+          ctx.fillStyle = '#3a4348';
+          ctx.fillRect(wx, wy, s * 0.18, wh);
+          ctx.fillStyle = 'rgba(255,255,255,0.22)';
+          ctx.fillRect(wx, wy, s * 0.18, wh * 0.28);
+          ctx.strokeStyle = t.trim; ctx.lineWidth = s * 0.012;
+          ctx.strokeRect(wx, wy, s * 0.18, wh);
+        }
+        // パネルの目地
+        ctx.fillStyle = t.panel;
+        ctx.fillRect(0, s * 0.55, s, s * 0.015);
+        for (let i = 0; i <= 2; i++) ctx.fillRect(s * i * 0.5, s * 0.55, s * 0.012, s * 0.45);
+        // 汚れ
+        ctx.fillStyle = 'rgba(90,80,60,0.08)';
+        for (let i = 0; i < 5; i++) ctx.fillRect(Math.random() * s, s * 0.6, s * 0.06, s * 0.4);
+        const grad = ctx.createLinearGradient(0, 0, 0, s);
+        grad.addColorStop(0, 'rgba(255,250,235,0.10)');
+        grad.addColorStop(1, 'rgba(0,0,0,0.14)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, s, s);
+      });
+    }
+    // 錆びたトタン板(基地の外壁・コンテナ風)
     return makeCanvasTexture((ctx, s) => {
-      // 錆びたオレンジ〜赤茶のトタン板(基地の外壁・コンテナ風)
-      ctx.fillStyle = '#b5551f';
+      ctx.fillStyle = t.base;
       ctx.fillRect(0, 0, s, s);
-      // トタンの横方向の波型ライン
-      ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+      ctx.strokeStyle = t.panel;
       ctx.lineWidth = s * 0.018;
       for (let i = 1; i < 8; i++) {
         ctx.beginPath();
@@ -3723,16 +3973,13 @@ const PvpSystem = (() => {
         ctx.lineTo(s, (s / 8) * i);
         ctx.stroke();
       }
-      // パネルの縦の継ぎ目
-      ctx.fillStyle = 'rgba(0,0,0,0.22)';
+      ctx.fillStyle = t.trim;
       ctx.fillRect(0, 0, s * 0.025, s);
       ctx.fillRect(s * 0.975, 0, s * 0.025, s);
-      // 錆・汚れの斑点
       ctx.fillStyle = 'rgba(60,30,10,0.18)';
       for (let i = 0; i < 8; i++) {
         ctx.fillRect(Math.random() * s, Math.random() * s, s * 0.1, s * 0.06);
       }
-      // 上からの日差しによる明暗
       const grad = ctx.createLinearGradient(0, 0, 0, s);
       grad.addColorStop(0, 'rgba(255,240,210,0.15)');
       grad.addColorStop(1, 'rgba(0,0,0,0.15)');
@@ -3740,6 +3987,7 @@ const PvpSystem = (() => {
       ctx.fillRect(0, 0, s, s);
     });
   }
+
 
   function buildMap() {
     const obstacleSet = new Set(OBSTACLE_CELLS.map(o => `${o.gx},${o.gy}`));
@@ -3752,7 +4000,7 @@ const PvpSystem = (() => {
     const floorMat = new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.85 });
     const floor = new THREE.Mesh(floorGeo, floorMat);
     floor.rotation.x = -Math.PI / 2;
-    scene.add(floor);
+    levelGroup.add(floor);
     // 屋外の基地という設定のため天井は設けない(空が見える)
 
     const wallTex = buildWallTexture();
@@ -3782,7 +4030,7 @@ const PvpSystem = (() => {
         }
       }
     }
-    scene.add(wallGroup);
+    levelGroup.add(wallGroup);
   }
 
   // ---- ドアのアーチ枠(部屋と通路の接続部分、木材で組んだゲート風の縁取り) ----
@@ -3807,7 +4055,7 @@ const PvpSystem = (() => {
           frameMat
         );
         header.position.set(worldX, postHeight, (z0 + z1) / 2);
-        scene.add(post1, post2, header);
+        levelGroup.add(post1, post2, header);
       } else {
         const worldZ = (d.by - GRID_SIZE / 2) * CELL_SIZE;
         const x0 = (d.x0 - GRID_SIZE / 2) * CELL_SIZE;
@@ -3821,7 +4069,7 @@ const PvpSystem = (() => {
           frameMat
         );
         header.position.set((x0 + x1) / 2, postHeight, worldZ);
-        scene.add(post1, post2, header);
+        levelGroup.add(post1, post2, header);
       }
     });
   }
@@ -3937,6 +4185,55 @@ const PvpSystem = (() => {
   // ---- 建物の外殻(壁の上部の帯 + 天井) ----
   // 外周のセルは通常の壁(高さ3.2)として描かれているので、その上に帯を足して高くし、
   // 天井を載せることで「屋内」にする。出入口の上は自然に まぐさ(リンテル)になる。
+  // ---- 外周の建物壁: マップを囲むビルの上層と屋上の手すり ----
+  // 高所に登ったときに壁の向こう(何もない空間)が見えてしまうのを防ぐ役目もある。
+  function buildPerimeter() {
+    const cfg = STAGE.theme.perimeter;
+    if (!cfg) return;
+    const gw = (g) => (g - GRID_SIZE / 2) * CELL_SIZE;
+    const inner0 = gw(1), inner1 = gw(GRID_SIZE - 1);
+    const outer0 = gw(0), outer1 = gw(GRID_SIZE);
+    const y0 = WALL_HEIGHT, y1 = cfg.top;
+    const wallMat = new THREE.MeshStandardMaterial({ color: cfg.color, roughness: 0.9 });
+    const capMat = new THREE.MeshStandardMaterial({ color: cfg.capColor, roughness: 0.75 });
+    const railMat = new THREE.MeshStandardMaterial({ color: 0x8f979a, roughness: 0.5, metalness: 0.55 });
+
+    const bands = [
+      [outer0, outer0, outer1, inner0], // 北
+      [outer0, inner1, outer1, outer1], // 南
+      [outer0, inner0, inner0, inner1], // 西
+      [inner1, inner0, outer1, inner1], // 東
+    ];
+    bands.forEach(([x0, z0, x1, z1]) => {
+      const body = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0), wallMat);
+      body.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+      wallGroup.add(body);
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0 + 0.3, 0.35, z1 - z0 + 0.3), capMat);
+      cap.position.set((x0 + x1) / 2, y1 + 0.17, (z0 + z1) / 2);
+      wallGroup.add(cap);
+      if (cfg.rail) {
+        // 屋上の手すり(画像の屋上にある金属の柵)
+        const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+        const horiz = (x1 - x0) > (z1 - z0);
+        const len = horiz ? (x1 - x0) : (z1 - z0);
+        [0.45, 0.95].forEach((hy) => {
+          const bar = new THREE.Mesh(
+            horiz ? new THREE.BoxGeometry(len, 0.07, 0.07) : new THREE.BoxGeometry(0.07, 0.07, len),
+            railMat);
+          bar.position.set(cx, y1 + 0.35 + hy, cz);
+          wallGroup.add(bar);
+        });
+        const n = Math.max(4, Math.round(len / 2.4));
+        for (let i = 0; i <= n; i++) {
+          const t = i / n;
+          const post = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.0, 0.08), railMat);
+          post.position.set(horiz ? x0 + len * t : cx, y1 + 0.85, horiz ? cz : z0 + len * t);
+          wallGroup.add(post);
+        }
+      }
+    });
+  }
+
   function buildEnclosures() {
     const gw = (g) => (g - GRID_SIZE / 2) * CELL_SIZE;
     BUILDINGS.forEach((bld) => {
@@ -3966,6 +4263,25 @@ const PvpSystem = (() => {
         new THREE.BoxGeometry(oMaxX - oMinX, bld.roofThickness, oMaxZ - oMinZ), roofMat);
       roof.position.set((oMinX + oMaxX) / 2, bandY1 + bld.roofThickness / 2, (oMinZ + oMaxZ) / 2);
       wallGroup.add(roof);
+      // 波板屋根: 天井の上に細いリブを並べてトタンらしく見せる
+      if (bld.roofStyle === 'corrugated') {
+        const ribMat = new THREE.MeshStandardMaterial({
+          color: 0xa7aeb2, roughness: 0.45, metalness: 0.55 });
+        const spanZ = oMaxZ - oMinZ;
+        const n = Math.max(4, Math.round((oMaxX - oMinX) / 0.75));
+        for (let i = 0; i < n; i++) {
+          const px = oMinX + (oMaxX - oMinX) * (i + 0.5) / n;
+          const rib = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.16, spanZ), ribMat);
+          rib.position.set(px, bandY1 + bld.roofThickness + 0.06, (oMinZ + oMaxZ) / 2);
+          wallGroup.add(rib);
+        }
+        // 軒先の水切り
+        [oMinZ, oMaxZ].forEach((pz) => {
+          const eave = new THREE.Mesh(new THREE.BoxGeometry(oMaxX - oMinX + 0.5, 0.14, 0.3), ribMat);
+          eave.position.set((oMinX + oMaxX) / 2, bandY1 + bld.roofThickness, pz);
+          wallGroup.add(eave);
+        });
+      }
 
       // 屋内の梁(トラス)。天井のすぐ下に等間隔で渡す
       const spanX = iMaxX - iMinX;
@@ -4011,6 +4327,7 @@ const PvpSystem = (() => {
       sand:      new THREE.MeshStandardMaterial({ color: 0x9c8f68, roughness: 1.0 }),
       stone:     new THREE.MeshStandardMaterial({ color: 0xd8d2c0, roughness: 0.85 }),
       stoneD:    new THREE.MeshStandardMaterial({ color: 0xb6ae9a, roughness: 0.9 }),
+      tarp:      new THREE.MeshStandardMaterial({ color: 0x8e8f89, roughness: 0.95 }),
     };
     const S = CELL_SIZE;
 
@@ -4073,6 +4390,28 @@ const PvpSystem = (() => {
             g.add(bag);
           }
         }
+      } else if (kind === 'tarp') {
+        // 防水シートを掛けた資材。パレットの上に箱、その上から灰色のシート
+        const pallet = new THREE.Mesh(new THREE.BoxGeometry(S * 0.92, 0.16, S * 0.9), mats.woodTrim);
+        pallet.position.y = 0.08; g.add(pallet);
+        for (let i = -1; i <= 1; i++) {
+          const slat = new THREE.Mesh(new THREE.BoxGeometry(S * 0.94, 0.08, 0.22), mats.wood);
+          slat.position.set(0, 0.19, i * S * 0.3); g.add(slat);
+        }
+        const box = new THREE.Mesh(new THREE.BoxGeometry(S * 0.78, 0.95, S * 0.76), mats.wood);
+        box.position.y = 0.7; g.add(box);
+        const tarpTop = new THREE.Mesh(new THREE.BoxGeometry(S * 0.9, 0.1, S * 0.88), mats.tarp);
+        tarpTop.position.y = 1.2; g.add(tarpTop);
+        [[0, 1], [0, -1], [1, 0], [-1, 0]].forEach(([sx, sz]) => {
+          const skirt = new THREE.Mesh(
+            new THREE.BoxGeometry(sx ? 0.1 : S * 0.9, 0.85, sz ? 0.1 : S * 0.88), mats.tarp);
+          skirt.position.set(sx * S * 0.45, 0.78, sz * S * 0.44);
+          skirt.rotation.z = sx * 0.06; skirt.rotation.x = -sz * 0.06;
+          g.add(skirt);
+        });
+        // 荷締めベルト
+        const belt = new THREE.Mesh(new THREE.BoxGeometry(S * 0.94, 0.07, 0.14), mats.rib);
+        belt.position.y = 0.95; g.add(belt);
       } else { // stone: 神殿・ビル周りの石材
         const h = 1.3;
         const body = new THREE.Mesh(new THREE.BoxGeometry(S * 0.74, h * 0.72, S * 0.74), mats.stone);
@@ -4094,8 +4433,8 @@ const PvpSystem = (() => {
     const skyGeo = new THREE.SphereGeometry(150, 24, 16);
     const colors = [];
     const pos = skyGeo.attributes.position;
-    const topColor = new THREE.Color(0x6fa8dc);
-    const bottomColor = new THREE.Color(0xe8ecdf);
+    const topColor = new THREE.Color(STAGE.theme.skyTop);
+    const bottomColor = new THREE.Color(STAGE.theme.skyBottom);
     for (let i = 0; i < pos.count; i++) {
       const y = pos.getY(i) / 150; // -1(下)〜1(上)
       const t = THREE.MathUtils.clamp(y * 0.7 + 0.35, 0, 1);
@@ -4105,7 +4444,7 @@ const PvpSystem = (() => {
     skyGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     const skyMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false });
     const sky = new THREE.Mesh(skyGeo, skyMat);
-    scene.add(sky);
+    levelGroup.add(sky);
   }
 
   // ---- トラック(景観・遮蔽物): 荷台とキャンバス屋根フレームを持つ簡易トラック ----
@@ -4244,12 +4583,33 @@ const PvpSystem = (() => {
   }
 
   // 手すり1本(上下2段の横棒 + 一定間隔の支柱)
-  function addRailRun(x1, z1, x2, z2, baseY, railH, mat) {
+  function addRailRun(x1, z1, x2, z2, baseY, railH, mat, style, balusterMat) {
     const dx = x2 - x1, dz = z2 - z1;
     const len = Math.hypot(dx, dz);
     if (len < 0.05) return;
     const cx = (x1 + x2) / 2, cz = (z1 + z2) / 2;
     const angle = Math.atan2(-dz, dx);
+
+    if (style === 'baluster') {
+      // 神殿・テラス風の欄干。細い柱を密に並べ、上下を笠木と土台で挟む
+      const capMat = balusterMat || mat;
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(len, 0.13, 0.3), capMat);
+      cap.position.set(cx, baseY + railH, cz); cap.rotation.y = angle;
+      wallGroup.add(cap);
+      const sill = new THREE.Mesh(new THREE.BoxGeometry(len, 0.14, 0.34), capMat);
+      sill.position.set(cx, baseY + 0.07, cz); sill.rotation.y = angle;
+      wallGroup.add(sill);
+      const n = Math.max(2, Math.round(len / 0.62));
+      for (let i = 0; i <= n; i++) {
+        const t = i / n;
+        const b = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.055, 0.075, railH - 0.2, 8), mat);
+        b.position.set(x1 + dx * t, baseY + 0.14 + (railH - 0.2) / 2, z1 + dz * t);
+        wallGroup.add(b);
+      }
+      return;
+    }
+
     [railH, railH * 0.52].forEach((hy, i) => {
       const bar = new THREE.Mesh(new THREE.BoxGeometry(len, i === 0 ? 0.1 : 0.06, 0.07), mat);
       bar.position.set(cx, baseY + hy, cz);
@@ -4317,6 +4677,56 @@ const PvpSystem = (() => {
           wallGroup.add(win);
         });
       }
+    } else if (zone.support === 'lattice') {
+      // 掘削やぐらの脚。4本の斜めの柱とブレースで床を支える
+      const legMat = mats.steel, braceMat = mats.steelDark;
+      const legTop = H - SLAB;
+      const spread = 1.5; // 下に行くほど広がる量
+      const corners = [[-1, -1], [1, -1], [-1, 1], [1, 1]];
+      corners.forEach(([sx, sz]) => {
+        const topX = cx + sx * (w / 2 - 0.5), topZ = cz + sz * (d / 2 - 0.5);
+        const botX = topX + sx * spread, botZ = topZ + sz * spread;
+        const len = Math.hypot(topX - botX, legTop, topZ - botZ);
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.3, len, 0.3), legMat);
+        leg.position.set((topX + botX) / 2, legTop / 2, (topZ + botZ) / 2);
+        leg.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0),
+          new THREE.Vector3(topX - botX, legTop, topZ - botZ).normalize());
+        wallGroup.add(leg);
+        columnObstacles.push({ x: (topX + botX) / 2, z: (topZ + botZ) / 2, radius: 0.3 });
+      });
+      // 水平のブレース
+      [0.35, 0.72].forEach((t) => {
+        const y = legTop * t;
+        const shrink = spread * (1 - t);
+        const bw = w - 1 + shrink * 2, bd = d - 1 + shrink * 2;
+        [[0, -bd / 2, bw, 0.16], [0, bd / 2, bw, 0.16]].forEach(([ox, oz, ln]) => {
+          const m = new THREE.Mesh(new THREE.BoxGeometry(ln, 0.16, 0.16), braceMat);
+          m.position.set(cx + ox, y, cz + oz); wallGroup.add(m);
+        });
+        [[-bw / 2, 0, bd], [bw / 2, 0, bd]].forEach(([ox, oz, ln]) => {
+          const m = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, ln), braceMat);
+          m.position.set(cx + ox, y, cz + oz); wallGroup.add(m);
+        });
+      });
+    } else if (zone.support === 'facade') {
+      // 建物の外壁(角に柱型、下部に窓)。テラスの土台に使う
+      const body = new THREE.Mesh(new THREE.BoxGeometry(w - 0.1, H - SLAB, d - 0.1), mats.facade);
+      body.position.set(cx, (H - SLAB) / 2, cz);
+      wallGroup.add(body);
+      [[b.minX, b.minZ], [b.maxX, b.minZ], [b.minX, b.maxZ], [b.maxX, b.maxZ]].forEach(([px, pz]) => {
+        const q = new THREE.Mesh(new THREE.BoxGeometry(0.5, H - SLAB, 0.5), mats.trim);
+        q.position.set(px - Math.sign(px - cx) * 0.2, (H - SLAB) / 2, pz - Math.sign(pz - cz) * 0.2);
+        wallGroup.add(q);
+      });
+      const winY = (H - SLAB) * 0.55;
+      const nx2 = Math.max(1, Math.floor(w / 4.5));
+      for (let i = 0; i < nx2; i++) {
+        const px = b.minX + w * (i + 0.5) / nx2;
+        [b.minZ, b.maxZ].forEach((pz) => {
+          const win = new THREE.Mesh(new THREE.BoxGeometry(1.8, 1.1, 0.12), mats.window);
+          win.position.set(px, winY, pz); wallGroup.add(win);
+        });
+      }
     } else if (zone.support === 'container') {
       // 見張り台の土台はコンテナ風。角柱 + 縦リブで金属らしく見せる
       const body = new THREE.Mesh(new THREE.BoxGeometry(w - 0.3, H - SLAB, d - 0.3), mats.container);
@@ -4373,7 +4783,9 @@ const PvpSystem = (() => {
           if (open.includes(s.name)) {
             addKerb(p1.x, p1.z, p2.x, p2.z, H, mats.trim);
           } else {
-            addRailRun(p1.x, p1.z, p2.x, p2.z, H, zone.railHeight || 1.0, mats.rail);
+            addRailRun(p1.x, p1.z, p2.x, p2.z, H, zone.railHeight || 1.0,
+              zone.railStyle === 'baluster' ? mats.baluster : mats.rail,
+              zone.railStyle, mats.balusterCap);
           }
           runStart = null;
         }
@@ -4420,33 +4832,38 @@ const PvpSystem = (() => {
     const isLadder = zone.style === 'ladder';
     const treadMat = isLadder ? mats.rail : mats.step;
 
-    // 斜路の本体。歩ける面とぴったり同じ傾きの板
-    addSlopeSlab(zone, width * 0.88, 0.22, -0.11, mats.step);
+    // 斜路の本体。歩ける面とぴったり同じ傾きの板。
+    // openTread(蹴込みのない鉄骨階段)は踏み板を密に並べて板を薄くする
+    const openTread = zone.style === 'openTread';
+    addSlopeSlab(zone, width * 0.88, openTread ? 0.1 : 0.22, openTread ? -0.05 : -0.11,
+      openTread ? mats.grate : mats.step);
 
     // 踏み板の縁(ノージング)。薄い板を等間隔に並べて階段らしく見せる。
     // 面そのものは斜路なので、高さのズレは板の厚み(0.07)だけで済む
-    const stepCount = Math.max(4, Math.round(Math.hypot(run, rise) / (isLadder ? 0.62 : 0.95)));
+    const pitch = isLadder ? 0.62 : (openTread ? 0.58 : 0.95);
+    const treadDepth = openTread ? 0.42 : (isLadder ? 0.14 : 0.2);
+    const stepCount = Math.max(4, Math.round(Math.hypot(run, rise) / pitch));
     for (let i = 1; i < stepCount; i++) {
       const t = i / stepCount;
       const p = rampPointAt(zone, t);
       const geo = alongX
-        ? new THREE.BoxGeometry(isLadder ? 0.14 : 0.2, 0.07, width * 0.86)
-        : new THREE.BoxGeometry(width * 0.86, 0.07, isLadder ? 0.14 : 0.2);
-      const nose = new THREE.Mesh(geo, treadMat);
-      nose.position.set(p.x, p.y + 0.035, p.z);
+        ? new THREE.BoxGeometry(treadDepth, openTread ? 0.09 : 0.07, width * 0.86)
+        : new THREE.BoxGeometry(width * 0.86, openTread ? 0.09 : 0.07, treadDepth);
+      const nose = new THREE.Mesh(geo, openTread ? mats.grate : treadMat);
+      nose.position.set(p.x, p.y + (openTread ? 0.045 : 0.035), p.z);
       wallGroup.add(nose);
     }
 
     // 両側の側桁(ストリンガー)
     [-1, 1].forEach((side) => {
-      const s = addSlopeSlab(zone, 0.16, 0.42, -0.12, mats.stringer);
+      const s = addSlopeSlab(zone, 0.16, 0.42, -0.12, openTread ? mats.steelDark : mats.stringer);
       if (alongX) s.position.z += side * width * 0.45;
       else s.position.x += side * width * 0.45;
     });
 
     // 手すり(斜路と同じ傾きで、少し上に浮かせる)
     [-1, 1].forEach((side) => {
-      const r = addSlopeSlab(zone, 0.09, 0.09, 1.02, mats.rail);
+      const r = addSlopeSlab(zone, 0.09, 0.09, 1.02, openTread ? mats.steel : mats.rail);
       if (alongX) r.position.z += side * width * 0.42;
       else r.position.x += side * width * 0.42;
       // 手すりの支柱
@@ -4465,6 +4882,133 @@ const PvpSystem = (() => {
     });
   }
 
+  // ---- 掘削やぐら(デリック): 床の上に伸びる鉄骨タワーとタンク ----
+  // マップ中央のランドマーク。上部は登れないが、遠くからでも位置が分かる目印になる。
+  function buildDerrick(zone, mats) {
+    const b = zoneWorldBounds(zone);
+    const cx = (b.minX + b.maxX) / 2, cz = (b.minZ + b.maxZ) / 2;
+    const baseY = zone.height;
+    const topY = baseY + 7.6;
+    const halfBot = 2.0, halfTop = 0.75;
+
+    // 4本の脚(上に行くほどすぼまる)
+    const legs = [[-1, -1], [1, -1], [-1, 1], [1, 1]];
+    legs.forEach(([sx, sz]) => {
+      const bx = cx + sx * halfBot, bz = cz + sz * halfBot;
+      const tx = cx + sx * halfTop, tz = cz + sz * halfTop;
+      const len = Math.hypot(tx - bx, topY - baseY, tz - bz);
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.22, len, 0.22), mats.steel);
+      leg.position.set((bx + tx) / 2, (baseY + topY) / 2, (bz + tz) / 2);
+      leg.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0),
+        new THREE.Vector3(tx - bx, topY - baseY, tz - bz).normalize());
+      wallGroup.add(leg);
+    });
+
+    // 水平材とX字のブレース(段ごとに幅が変わる)
+    const tiers = 5;
+    for (let i = 0; i <= tiers; i++) {
+      const t = i / tiers;
+      const y = baseY + (topY - baseY) * t;
+      const half = halfBot + (halfTop - halfBot) * t;
+      const ring = [[-half, -half, half, -half], [-half, half, half, half],
+                    [-half, -half, -half, half], [half, -half, half, half]];
+      ring.forEach(([ax, az, bx2, bz2]) => {
+        const len = Math.hypot(bx2 - ax, bz2 - az);
+        const m = new THREE.Mesh(new THREE.BoxGeometry(len, 0.12, 0.12), mats.steelDark);
+        m.position.set(cx + (ax + bx2) / 2, y, cz + (az + bz2) / 2);
+        m.rotation.y = Math.atan2(-(bz2 - az), bx2 - ax);
+        wallGroup.add(m);
+      });
+      if (i < tiers) {
+        const half2 = halfBot + (halfTop - halfBot) * ((i + 1) / tiers);
+        const y2 = baseY + (topY - baseY) * ((i + 1) / tiers);
+        [[-1, 1], [1, -1]].forEach(([s1, s2]) => {
+          [[0, 1], [1, 0]].forEach(([ax, az]) => {
+            const p1 = new THREE.Vector3(cx + (ax ? s1 * half : -half * (az ? s1 : 1)), y,
+              cz + (az ? s1 * half : -half));
+            const p2 = new THREE.Vector3(cx + (ax ? s2 * half2 : half2 * (az ? s2 : 1)), y2,
+              cz + (az ? s2 * half2 : half2));
+            const len = p1.distanceTo(p2);
+            const br = new THREE.Mesh(new THREE.BoxGeometry(0.08, len, 0.08), mats.steelDark);
+            br.position.copy(p1).add(p2).multiplyScalar(0.5);
+            br.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0),
+              p2.clone().sub(p1).normalize());
+            wallGroup.add(br);
+          });
+        });
+      }
+    }
+
+    // 頂部のプラットフォームと、吊り下がった円筒タンク
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(halfTop * 2.6, 0.16, halfTop * 2.6), mats.steel);
+    cap.position.set(cx, topY, cz);
+    wallGroup.add(cap);
+    const tank = new THREE.Mesh(new THREE.CylinderGeometry(1.05, 1.05, 1.5, 16), mats.tank);
+    tank.rotation.z = Math.PI / 2;
+    tank.position.set(cx, topY - 1.4, cz + 0.2);
+    wallGroup.add(tank);
+    [-0.72, 0.72].forEach((o) => {
+      const rim = new THREE.Mesh(new THREE.CylinderGeometry(1.12, 1.12, 0.12, 16), mats.steelDark);
+      rim.rotation.z = Math.PI / 2;
+      rim.position.set(cx + o, topY - 1.4, cz + 0.2);
+      wallGroup.add(rim);
+    });
+
+    // 支線(ガイワイヤー)。四方の地面へ張る
+    [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([sx, sz]) => {
+      const gx2 = cx + sx * 7.5, gz2 = cz + sz * 7.5;
+      const p1 = new THREE.Vector3(cx + sx * halfTop, topY - 0.2, cz + sz * halfTop);
+      const p2 = new THREE.Vector3(gx2, 0, gz2);
+      const len = p1.distanceTo(p2);
+      const wire = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, len, 5), mats.steelDark);
+      wire.position.copy(p1).add(p2).multiplyScalar(0.5);
+      wire.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), p2.clone().sub(p1).normalize());
+      levelGroup.add(wire); // 弾は貫通させたいので壁グループには入れない
+    });
+  }
+
+  // ---- 金網フェンス: 視線も弾も通すが、区画の雰囲気を作る ----
+  function buildFences() {
+    if (!FENCES || FENCES.length === 0) return;
+    const postMat = new THREE.MeshStandardMaterial({ color: 0x8a8f90, roughness: 0.5, metalness: 0.6 });
+    const meshTex = makeCanvasTexture((ctx, sz) => {
+      ctx.clearRect(0, 0, sz, sz);
+      ctx.strokeStyle = 'rgba(190,196,198,0.95)';
+      ctx.lineWidth = sz * 0.035;
+      for (let i = -sz; i < sz * 2; i += sz / 7) {
+        ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i + sz, sz); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(i + sz, 0); ctx.lineTo(i, sz); ctx.stroke();
+      }
+    }, 128);
+    const netMat = new THREE.MeshBasicMaterial({
+      map: meshTex, transparent: true, alphaTest: 0.35, side: THREE.DoubleSide, fog: true,
+    });
+    const gw = (g) => (g - GRID_SIZE / 2) * CELL_SIZE;
+    const H = 2.4;
+    FENCES.forEach((f) => {
+      const x1 = gw(f.gx0), z1 = gw(f.gy0), x2 = gw(f.gx1), z2 = gw(f.gy1);
+      const len = Math.hypot(x2 - x1, z2 - z1);
+      if (len < 0.1) return;
+      const ang = Math.atan2(-(z2 - z1), x2 - x1);
+      const net = new THREE.Mesh(new THREE.PlaneGeometry(len, H), netMat);
+      net.position.set((x1 + x2) / 2, H / 2, (z1 + z2) / 2);
+      net.rotation.y = ang;
+      meshTex.repeat.set(len / 2, H / 2);
+      levelGroup.add(net);
+      [0, 1].forEach((t) => {
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, H + 0.2, 8), postMat);
+        post.position.set(x1 + (x2 - x1) * t, (H + 0.2) / 2, z1 + (z2 - z1) * t);
+        levelGroup.add(post);
+      });
+      [H, 0.12].forEach((hy) => {
+        const bar = new THREE.Mesh(new THREE.BoxGeometry(len, 0.08, 0.08), postMat);
+        bar.position.set((x1 + x2) / 2, hy, (z1 + z2) / 2);
+        bar.rotation.y = ang;
+        levelGroup.add(bar);
+      });
+    });
+  }
+
   function buildElevatedStructures() {
     const mats = {
       slab:      new THREE.MeshStandardMaterial({ color: 0xcfc9b8, roughness: 0.8 }),
@@ -4475,6 +5019,12 @@ const PvpSystem = (() => {
       rail:      new THREE.MeshStandardMaterial({ color: 0x4a4438, roughness: 0.5, metalness: 0.45 }),
       step:      new THREE.MeshStandardMaterial({ color: 0x9a9384, roughness: 0.8 }),
       stringer:  new THREE.MeshStandardMaterial({ color: 0x6b6558, roughness: 0.7, metalness: 0.2 }),
+      steel:     new THREE.MeshStandardMaterial({ color: 0x9aa0a4, roughness: 0.5, metalness: 0.6 }),
+      steelDark: new THREE.MeshStandardMaterial({ color: 0x6d7378, roughness: 0.55, metalness: 0.6 }),
+      tank:      new THREE.MeshStandardMaterial({ color: 0xc9ccc8, roughness: 0.4, metalness: 0.55 }),
+      baluster:  new THREE.MeshStandardMaterial({ color: 0x8fb6cf, roughness: 0.5, metalness: 0.25 }),
+      balusterCap: new THREE.MeshStandardMaterial({ color: 0xe4e0d2, roughness: 0.75 }),
+      grate:     new THREE.MeshStandardMaterial({ color: 0x777d80, roughness: 0.55, metalness: 0.55 }),
     };
     // 下部構造(スラブ・外壁)を先に、手すりを後に作ると重なりが目立ちにくい
     mats.stone = new THREE.MeshStandardMaterial({ color: 0xd6d0be, roughness: 0.85 });
@@ -4482,6 +5032,7 @@ const PvpSystem = (() => {
     HEIGHT_ZONES.filter(z => z.type === 'flat').forEach(z => buildFlatZone(z, mats));
     HEIGHT_ZONES.filter(z => z.type === 'ramp').forEach(z => buildRampZone(z, mats));
     HEIGHT_ZONES.filter(z => z.colonnade).forEach(z => buildColonnade(z, mats));
+    HEIGHT_ZONES.filter(z => z.derrick).forEach(z => buildDerrick(z, mats));
   }
 
   // ---- 裏ルート(ダクト)の演出: 低い天板+リブでトンネルらしさを出す ----
@@ -4885,7 +5436,8 @@ const PvpSystem = (() => {
       return;
     }
 
-    if (!sceneBuilt) buildScene();
+    if (currentStageId !== selectedStage) setStage(selectedStage);
+    if (!sceneBuilt) buildScene(); else applySelectedStage();
 
     if (selectedMode === 'pvp') {
       // 対戦モード: 敵・味方の初期化はせず、先に接続画面へ進む
@@ -5149,11 +5701,26 @@ const PvpSystem = (() => {
       onDeathCredited: updatePvpScoreHud,
       onOpponentDisconnected: onPvpOpponentDisconnected,
       onMatchEnd: endPvpMatch,
+      onStageSync: (id) => {
+        // ホストのステージに合わせて、マップを組み直してスポーンし直す
+        if (!id || id === currentStageId || !STAGE_DEFS[id]) return;
+        selectedStage = id;
+        setStage(id);
+        buildLevel();
+        const g = pvpIsHost ? PVP_SPAWN_HOST : PVP_SPAWN_GUEST;
+        const w = gridToWorld(g.gx, g.gy);
+        playerPos.set(w.x, 0, w.z);
+        playerVelX = 0; playerVelZ = 0;
+        snapCameraToPlayer();
+      },
       onRematchRequested: () => {
         // 自分がまだ結果画面にいる場合のみ、相手発の再戦リクエストで自動的に試合を再開する
         if (gameState !== 'playing') restartPvpMatch();
       },
     });
+
+    // ホストが選んだステージを相手に伝える(両者で同じマップにする)
+    if (pvpIsHost) PvpSystem.sendStage(currentStageId);
 
     await SensorSystem.waitForFirstOrientation();
     SensorSystem.calibrate();
