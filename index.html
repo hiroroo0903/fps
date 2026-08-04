@@ -723,207 +723,219 @@ html, body {
 /* ==================== js/mapdata.js ==================== */
 // ============================================================
 // mapdata.js
-// 固定の手作りマップレイアウト(部屋+通路構成)をグリッドとして定義する。
-// グリッドは 44x44。0 = 壁, 1 = 床。
-// 部屋・通路は「矩形(x,y,w,h)」のリストとして人手でデザインし、
-// それをもとにグリッドを構築する(ASCIIアートより誤り無く再現しやすいため)。
+// 固定の手作りマップレイアウトをグリッドとして定義する。
+// グリッドは 32x32 (1マス4unit = 128x128unit)。0 = 壁, 1 = 床。
+//
+// ---- マップ設計 ----
+//   北西  A スタートルーム
+//   北    B ビル1階(屋内)  →  その南側の屋上が 2Fデッキ + ベランダ
+//   北東  C 東の部屋
+//   西    D 西の部屋(2Fへ上がる階段の起点)
+//   東    E 東の縦通路
+//   中央  F 長い直線通路(東西84unit。撃ち合い用のレーン)
+//   南西  H 南西の部屋
+//   南    G 広い庭(車・トラック・木箱・柱を配置、中央に見張り台)
+//   裏道  3本のダクト(1マス幅の細い近道)
+//
+// ---- 高さについて ----
+// 高さは HEIGHT_ZONES で管理する。ゾーンの範囲は「セル番号の閉区間」で指定し、
+// 内部ではグリッド浮動小数座標の [gx0, gx1+1] × [gy0, gy1+1] として扱う。
+// こうしないとゾーンの端1マス分の高さが抜け落ち、床が突然消える(=表示バグ)。
+// ランプ(階段・はしご)は axis で向きを明示し、その区間の端から端まで
+// 連続的に高さが変化する。見た目の階段もまったく同じ式で生成するため、
+// 「見えている段」と「実際に立てる高さ」が必ず一致する。
 // ============================================================
 
-const GRID_SIZE = 44;
+const GRID_SIZE = 32;
 const CELL_SIZE = 4; // Three.js空間上の1マスのサイズ(unit)
+
+// 登れる段差の上限(unit)。これを超える高さの差は登れない(飛び降りは可能)。
+// 高所エリアの縁が「壁」として機能し、階段・はしご以外から上に行けなくなる。
+const MAX_STEP_UP = 0.45;
 
 // 部屋の矩形定義 [x, y, w, h] (グリッド座標、外周1マスは常に壁として残す)
 const ROOMS = [
-  { id: 'A', x: 1, y: 1, w: 4, h: 4, name: 'スタートルーム' },
-  { id: 'B', x: 8, y: 1, w: 5, h: 4, name: '北の部屋' },
-  { id: 'C', x: 15, y: 1, w: 4, h: 6, name: '東の縦長部屋' },
-  { id: 'D', x: 1, y: 8, w: 5, h: 5, name: '西の部屋' },
-  { id: 'E', x: 8, y: 8, w: 6, h: 6, name: '中央広間' },
-  { id: 'F', x: 15, y: 9, w: 4, h: 6, name: '東南の部屋' },
-  { id: 'G', x: 1, y: 15, w: 6, h: 4, name: '南西の部屋' },
-  { id: 'H', x: 9, y: 15, w: 5, h: 4, name: '南の部屋' },
-  // --- 増築エリア(迂回ルート・フランキングルート・戦闘用の広い空間) ---
-  { id: 'I', x: 20, y: 1, w: 4, h: 5, name: '東の増築室' },
-  { id: 'J', x: 20, y: 9, w: 5, h: 6, name: '東南アリーナ' },
-  { id: 'K', x: 8, y: 20, w: 9, h: 4, name: '南の大部屋' },
-  // --- 戦闘用の大規模拡張エリア ---
-  { id: 'N', x: 26, y: 8, w: 6, h: 5, name: 'ビル1階' },
-  { id: 'M', x: 26, y: 16, w: 10, h: 2, name: '長い直線通路' },
-  { id: 'O', x: 20, y: 20, w: 16, h: 9, name: '広い庭' },
+  { id: 'A', x: 2,  y: 2,  w: 6,  h: 5,  name: 'スタートルーム' },
+  { id: 'B', x: 11, y: 2,  w: 9,  h: 5,  name: 'ビル1階' },
+  { id: 'C', x: 24, y: 2,  w: 7,  h: 7,  name: '東の部屋' },
+  { id: 'D', x: 2,  y: 8,  w: 4,  h: 7,  name: '西の部屋' },
+  { id: 'E', x: 26, y: 10, w: 5,  h: 8,  name: '東の縦通路' },
+  { id: 'F', x: 4,  y: 16, w: 21, h: 2,  name: '長い直線通路' },
+  { id: 'G', x: 11, y: 20, w: 20, h: 11, name: '広い庭' },
+  { id: 'H', x: 2,  y: 21, w: 7,  h: 7,  name: '南西の部屋' },
 ];
 
-// 通路の矩形定義(部屋同士をつなぐ)
+// 通路の矩形定義(部屋同士をつなぐ。ここにはドア枠が生成される)
 const CORRIDORS = [
-  { x: 5, y: 2, w: 3, h: 2 },   // A - B
-  { x: 13, y: 2, w: 2, h: 2 },  // B - C
-  { x: 2, y: 5, w: 2, h: 3 },   // A - D
-  { x: 6, y: 9, w: 2, h: 2 },   // D - E
-  { x: 14, y: 10, w: 1, h: 2 }, // E - F
-  { x: 16, y: 7, w: 2, h: 2 },  // C - F
-  { x: 2, y: 13, w: 2, h: 2 },  // D - G
-  { x: 10, y: 14, w: 2, h: 1 }, // E - H
-  { x: 7, y: 16, w: 2, h: 2 },  // G - H
-  // --- 増築エリアへの接続。C-I-J-Fで一周できるループ(フランキングルート)を形成 ---
-  { x: 19, y: 2, w: 1, h: 2 },  // C - I
-  { x: 21, y: 6, w: 2, h: 3 },  // I - J
-  { x: 19, y: 10, w: 1, h: 2 }, // J - F
-  { x: 10, y: 19, w: 2, h: 1 }, // H - K
-  // --- 大規模拡張エリアへの接続 ---
-  { x: 27, y: 13, w: 2, h: 3 }, // N - M(ビルと直線通路)
-  { x: 28, y: 18, w: 2, h: 2 }, // M - O(直線通路と庭)
-  // --- 裏ルート(ダクト、3本の細い近道) ---
-  { x: 9, y: 5, w: 1, h: 3 },   // duct1: B - E
-  { x: 19, y: 8, w: 1, h: 2 },  // duct2a: F への接続(縦の折れ)
-  { x: 19, y: 8, w: 7, h: 1 },  // duct2b: F - N(横の本線)
-  { x: 17, y: 21, w: 3, h: 1 }, // duct3: K - O
+  { x: 8,  y: 3,  w: 3, h: 2 }, // A - B
+  { x: 3,  y: 7,  w: 2, h: 1 }, // A - D
+  { x: 20, y: 3,  w: 4, h: 2 }, // B - C
+  { x: 27, y: 9,  w: 3, h: 1 }, // C - E
+  { x: 6,  y: 10, w: 2, h: 2 }, // D - 階段の下
+  { x: 4,  y: 15, w: 2, h: 1 }, // D - F
+  { x: 25, y: 17, w: 1, h: 1 }, // F - E
+  { x: 20, y: 18, w: 2, h: 2 }, // F - G(庭)
+  { x: 7,  y: 18, w: 2, h: 3 }, // F - H
+  { x: 9,  y: 24, w: 2, h: 2 }, // H - G(庭)
 ];
 
-// 高所エリア(2階・階段・ハシゴ・見張り台)の矩形定義。
-// MAP_GRID上は通常の通路と同じく歩行可能として彫るが、壁の自動生成の対象からは除外し、
-// 高さは別途HEIGHT_ZONESで管理する(見た目・カメラの高さに反映される)。
+// 裏ルート(ダクト): 1マス幅の細い近道。天井が低く、通ると近道になる
+const DUCTS = [
+  // duct1: 西の部屋D → 南西の部屋H(長い直線通路を通らずに南下できる)
+  { x: 2,  y: 15, w: 1, h: 6 },
+  // duct2: ビル1階B → 東の縦通路E(東の部屋Cを迂回する)
+  { x: 20, y: 6,  w: 1, h: 1 },
+  { x: 21, y: 6,  w: 1, h: 5 },
+  { x: 22, y: 10, w: 4, h: 1 },
+  // duct3: 東の縦通路E → 庭G(庭の東側に直接出る)
+  { x: 29, y: 18, w: 1, h: 2 },
+];
+
+// 高所エリア(2階デッキ・ベランダ・階段・見張り台・はしご)。
+// MAP_GRID上は歩行可能として彫るが、高さはHEIGHT_ZONESで管理する。
 const ELEVATED_CORRIDORS = [
-  { x: 26, y: 4, w: 2, h: 3 },  // ビルの階段
-  { x: 26, y: 7, w: 2, h: 1 },  // 階段とビル1階(N)の間の踊り場
-  { x: 25, y: 1, w: 9, h: 3 },  // ビル2階(ベランダ含む)
-  { x: 27, y: 29, w: 1, h: 3 }, // ハシゴ
-  { x: 26, y: 32, w: 3, h: 2 }, // 見張り台の床
+  { x: 11, y: 8,  w: 9, h: 6 }, // 2Fデッキ(ビルの屋上)
+  { x: 14, y: 14, w: 4, h: 2 }, // ベランダ(長い直線通路を見下ろす張り出し)
+  { x: 8,  y: 10, w: 3, h: 2 }, // 2Fへの階段
+  { x: 21, y: 24, w: 3, h: 3 }, // 見張り台
+  { x: 22, y: 27, w: 1, h: 2 }, // 見張り台へのはしご階段
 ];
 
-// 高さゾーン: 上記ELEVATED_CORRIDORSの各区画に対応する高さの情報。
-// type: 'ramp'(区画内で高さが連続的に変化する。階段・ハシゴ) / 'flat'(一定の高さ。2階の床・見張り台)
+// 高さゾーン。範囲はセル番号の閉区間(内部で [gx0, gx1+1] の浮動小数区間として扱う)。
+//  type 'flat' : 一定の高さ
+//  type 'ramp' : axis 方向に h0 → h1 へ連続的に変化する(階段・はしご)
+const DECK_HEIGHT = 3.2;   // 壁と同じ高さ = ビルの屋上
+const TOWER_HEIGHT = 2.2;  // 見張り台。高すぎると上が有利になりすぎるため控えめ
 const HEIGHT_ZONES = [
-  { type: 'ramp', gx0: 26, gy0: 4, gx1: 27, gy1: 6, h0: 3.2, h1: 0 },     // 階段(上=ビル2階側 → 下=1階側)
-  { type: 'flat', gx0: 26, gy0: 7, gx1: 27, gy1: 7, height: 0 },          // 踊り場(1階と同じ高さ)
-  { type: 'flat', gx0: 25, gy0: 1, gx1: 33, gy1: 3, height: 3.2 },        // ビル2階・ベランダ
-  { type: 'ramp', gx0: 27, gy0: 29, gx1: 27, gy1: 31, h0: 0, h1: 2.0 },   // ハシゴ(下=庭側 → 上=見張り台側)
-  { type: 'flat', gx0: 26, gy0: 32, gx1: 28, gy1: 33, height: 2.0 },      // 見張り台
+  { id: 'deck',    type: 'flat', gx0: 11, gy0: 8,  gx1: 19, gy1: 13, height: DECK_HEIGHT,
+    support: 'solid', railHeight: 1.05 },
+  { id: 'balcony', type: 'flat', gx0: 14, gy0: 14, gx1: 17, gy1: 15, height: DECK_HEIGHT,
+    support: 'solid', railHeight: 1.05, openSides: ['south'] },
+  { id: 'stairs',  type: 'ramp', axis: 'x', gx0: 8,  gy0: 10, gx1: 10, gy1: 11,
+    h0: 0, h1: DECK_HEIGHT, style: 'stairs' },
+  { id: 'tower',   type: 'flat', gx0: 21, gy0: 24, gx1: 23, gy1: 26, height: TOWER_HEIGHT,
+    support: 'container', railHeight: 0.9 },
+  { id: 'ladder',  type: 'ramp', axis: 'y', gx0: 22, gy0: 27, gx1: 22, gy1: 28,
+    h0: TOWER_HEIGHT, h1: 0, style: 'ladder' },
 ];
 
-// 部屋内の遮蔽物(クレート)。視線と移動を遮る戦術的な障害物。
-// グリッド上は壁と同様に通行不可として扱うが、見た目・高さは壁と区別する。
+// 遮蔽物(木箱)。視線と移動を遮る。曲がり角を作るために意図的に配置する
 const OBSTACLE_CELLS = [
-  { gx: 9, gy: 9 }, { gx: 12, gy: 12 },    // 中央広間(E)
-  { gx: 22, gy: 11 }, { gx: 23, gy: 13 },  // 東南アリーナ(J)
-  { gx: 11, gy: 21 }, { gx: 14, gy: 22 },  // 南の大部屋(K)
-  { gx: 9, gy: 2 }, { gx: 11, gy: 3 },     // 北の部屋(B)
-  { gx: 16, gy: 2 }, { gx: 17, gy: 4 },    // 東の縦長部屋(C)
-  { gx: 2, gy: 9 }, { gx: 4, gy: 11 },     // 西の部屋(D)
-  { gx: 2, gy: 16 }, { gx: 4, gy: 17 },    // 南西の部屋(G)
-  { gx: 16, gy: 10 }, { gx: 17, gy: 13 },  // 東南の部屋(F)
-  { gx: 21, gy: 2 },                       // 東の増築室(I)
-  { gx: 30, gy: 16 }, { gx: 32, gy: 17 },  // 長い直線通路(M、遮蔽物で一直線の撃ち合いを少し崩す)
-  // 広い庭(O)の障害物
-  { gx: 22, gy: 22 }, { gx: 30, gy: 22 }, { gx: 23, gy: 27 },
-  { gx: 32, gy: 26 }, { gx: 27, gy: 22 }, { gx: 33, gy: 24 },
+  // 北エリア
+  { gx: 5,  gy: 4 },  { gx: 13, gy: 4 }, { gx: 17, gy: 3 },
+  { gx: 26, gy: 4 },  { gx: 29, gy: 6 },
+  // 西
+  { gx: 3,  gy: 10 }, { gx: 4,  gy: 13 },
+  // 東の縦通路
+  { gx: 28, gy: 12 }, { gx: 27, gy: 15 }, { gx: 27, gy: 17 }, { gx: 28, gy: 7 },
+  // 長い直線通路(交互に置いて、一直線の撃ち合いに逃げ場を作る)
+  { gx: 9,  gy: 16 }, { gx: 14, gy: 17 }, { gx: 19, gy: 16 }, { gx: 22, gy: 17 },
+  // 南西の部屋
+  { gx: 4,  gy: 23 }, { gx: 7,  gy: 26 },
+  // 庭
+  { gx: 13, gy: 22 }, { gx: 16, gy: 26 }, { gx: 19, gy: 29 }, { gx: 25, gy: 21 },
+  { gx: 28, gy: 23 }, { gx: 29, gy: 28 }, { gx: 14, gy: 29 }, { gx: 26, gy: 29 },
+  { gx: 29, gy: 21 },
 ];
 
-// トラック(景観・遮蔽物)を配置するグリッドの区画。ここは通行不可にする
-const TRUCK_FOOTPRINT_CELLS = [
-  { gx: 10, gy: 11 }, { gx: 11, gy: 11 },
-];
-
-// 車(景観・遮蔽物、庭に設置)を配置するグリッドの区画
-const CAR_FOOTPRINT_CELLS = [
-  { gx: 24, gy: 24 }, { gx: 25, gy: 24 },
+// 車両(景観・遮蔽物)。kind: 'truck' | 'car'。cells は2マス分の footprint
+const VEHICLES = [
+  { kind: 'truck', cells: [{ gx: 17, gy: 23 }, { gx: 18, gy: 23 }], color: 0x5a6058 },
+  { kind: 'car',   cells: [{ gx: 26, gy: 26 }, { gx: 27, gy: 26 }], color: 0x7a2828 },
+  { kind: 'car',   cells: [{ gx: 12, gy: 27 }, { gx: 13, gy: 27 }], color: 0x2c4a6a },
 ];
 
 function buildGrid() {
   const grid = [];
   for (let y = 0; y < GRID_SIZE; y++) {
     const row = [];
-    for (let x = 0; x < GRID_SIZE; x++) {
-      row.push(0); // 全て壁で初期化
-    }
+    for (let x = 0; x < GRID_SIZE; x++) row.push(0);
     grid.push(row);
   }
   const carve = (x, y, w, h) => {
     for (let iy = y; iy < y + h; iy++) {
       for (let ix = x; ix < x + w; ix++) {
-        if (ix > 0 && iy > 0 && ix < GRID_SIZE - 1 && iy < GRID_SIZE - 1) {
-          grid[iy][ix] = 1;
-        }
+        if (ix > 0 && iy > 0 && ix < GRID_SIZE - 1 && iy < GRID_SIZE - 1) grid[iy][ix] = 1;
       }
     }
   };
   ROOMS.forEach(r => carve(r.x, r.y, r.w, r.h));
   CORRIDORS.forEach(c => carve(c.x, c.y, c.w, c.h));
+  DUCTS.forEach(c => carve(c.x, c.y, c.w, c.h));
   ELEVATED_CORRIDORS.forEach(c => carve(c.x, c.y, c.w, c.h));
   return grid;
 }
 
 const MAP_GRID = buildGrid();
 
-// 高所エリアに属するセルの集合(壁の自動生成から除外するために使う。game.js側で参照)
+// 高所エリアに属するセルの集合(描画側で参照する)
 const ELEVATED_CELLS = new Set();
 ELEVATED_CORRIDORS.forEach((c) => {
   for (let iy = c.y; iy < c.y + c.h; iy++) {
-    for (let ix = c.x; ix < c.x + c.w; ix++) {
-      ELEVATED_CELLS.add(`${ix},${iy}`);
-    }
+    for (let ix = c.x; ix < c.x + c.w; ix++) ELEVATED_CELLS.add(`${ix},${iy}`);
   }
 });
 
-// 指定したグリッド座標(小数可)の地面の高さを求める(階段・ハシゴは連続的に、平らな場所は一定)
+// ダクトのセル集合(低い天井の描画に使う)
+const DUCT_CELLS = new Set();
+DUCTS.forEach((c) => {
+  for (let iy = c.y; iy < c.y + c.h; iy++) {
+    for (let ix = c.x; ix < c.x + c.w; ix++) DUCT_CELLS.add(`${ix},${iy}`);
+  }
+});
+
+// 高さゾーンの浮動小数範囲(セル番号の閉区間 → [gx0, gx1+1] の区間)
+function zoneBoundsGrid(zone) {
+  return { x0: zone.gx0, x1: zone.gx1 + 1, y0: zone.gy0, y1: zone.gy1 + 1 };
+}
+
+// 指定したグリッド座標(小数)の地面の高さ。階段は連続的に、平らな場所は一定
 function getGroundHeightAtGrid(gx, gy) {
   let best = 0;
   for (const zone of HEIGHT_ZONES) {
-    if (gx < zone.gx0 || gx > zone.gx1 || gy < zone.gy0 || gy > zone.gy1) continue;
+    const b = zoneBoundsGrid(zone);
+    if (gx < b.x0 || gx > b.x1 || gy < b.y0 || gy > b.y1) continue;
     let h;
     if (zone.type === 'flat') {
       h = zone.height;
     } else {
-      const wSpan = zone.gx1 - zone.gx0;
-      const hSpan = zone.gy1 - zone.gy0;
-      let t;
-      if (wSpan >= hSpan) {
-        t = wSpan === 0 ? 0 : (gx - zone.gx0) / wSpan;
-      } else {
-        t = hSpan === 0 ? 0 : (gy - zone.gy0) / hSpan;
-      }
-      t = Math.max(0, Math.min(1, t));
-      h = zone.h0 + (zone.h1 - zone.h0) * t;
+      const t = zone.axis === 'x'
+        ? (gx - b.x0) / (b.x1 - b.x0)
+        : (gy - b.y0) / (b.y1 - b.y0);
+      const tc = Math.max(0, Math.min(1, t));
+      h = zone.h0 + (zone.h1 - zone.h0) * tc;
     }
     if (h > best) best = h;
   }
   return best;
 }
 
-// 指定したワールド座標の地面の高さを求める(カメラ・敵・味方の描画Yに使う)
+// 指定したワールド座標の地面の高さ
 function getGroundHeightAt(worldX, worldZ) {
-  const gxf = worldX / CELL_SIZE + GRID_SIZE / 2;
-  const gyf = worldZ / CELL_SIZE + GRID_SIZE / 2;
-  return getGroundHeightAtGrid(gxf, gyf);
+  return getGroundHeightAtGrid(worldX / CELL_SIZE + GRID_SIZE / 2, worldZ / CELL_SIZE + GRID_SIZE / 2);
 }
 
-// 遮蔽物セルを通行不可にする(構造壁とは別扱い。描画はcrate状にする)
+// 遮蔽物・車両の区画を通行不可にする(構造壁とは別扱い。描画は専用)
 OBSTACLE_CELLS.forEach((o) => { MAP_GRID[o.gy][o.gx] = 0; });
-TRUCK_FOOTPRINT_CELLS.forEach((o) => { MAP_GRID[o.gy][o.gx] = 0; });
-CAR_FOOTPRINT_CELLS.forEach((o) => { MAP_GRID[o.gy][o.gx] = 0; });
+VEHICLES.forEach((v) => { v.cells.forEach((c) => { MAP_GRID[c.gy][c.gx] = 0; }); });
 
-// ドア開口部(部屋と通路が接する境界)を矩形の隣接関係から自動算出する。
-// 各要素: { axis: 'x'|'z', ...境界座標(グリッド単位)..., roomId }
-// axis='x' : 東西方向に通り抜ける開口部(境界線はX方向に一定、Y方向に幅を持つ)
-// axis='z' : 南北方向に通り抜ける開口部(境界線はY方向に一定、X方向に幅を持つ)
+// ドア開口部(部屋と通路が接する境界)を矩形の隣接関係から自動算出する
 function computeDoorways() {
   const doors = [];
   CORRIDORS.forEach((c) => {
     ROOMS.forEach((r) => {
-      // 通路が部屋の左側に接する(通路の右端 = 部屋の左端)
       if (c.x + c.w === r.x) {
         const y0 = Math.max(c.y, r.y), y1 = Math.min(c.y + c.h, r.y + r.h);
         if (y1 > y0) doors.push({ axis: 'x', bx: r.x, y0, y1, roomId: r.id });
       }
-      // 通路が部屋の右側に接する
       if (r.x + r.w === c.x) {
         const y0 = Math.max(c.y, r.y), y1 = Math.min(c.y + c.h, r.y + r.h);
         if (y1 > y0) doors.push({ axis: 'x', bx: c.x, y0, y1, roomId: r.id });
       }
-      // 通路が部屋の上側に接する
       if (c.y + c.h === r.y) {
         const x0 = Math.max(c.x, r.x), x1 = Math.min(c.x + c.w, r.x + r.w);
         if (x1 > x0) doors.push({ axis: 'z', by: r.y, x0, x1, roomId: r.id });
       }
-      // 通路が部屋の下側に接する
       if (r.y + r.h === c.y) {
         const x0 = Math.max(c.x, r.x), x1 = Math.min(c.x + c.w, r.x + r.w);
         if (x1 > x0) doors.push({ axis: 'z', by: c.y, x0, x1, roomId: r.id });
@@ -935,44 +947,42 @@ function computeDoorways() {
 
 const DOORWAYS = computeDoorways();
 
-// プレイヤー開始位置(ルームAの中央付近)、グリッド座標
-const PLAYER_START = { gx: 3, gy: 3 };
+// プレイヤー開始位置(スタートルームA)
+const PLAYER_START = { gx: 4, gy: 4 };
 
-// 対戦モード(2人)用のスポーン地点。ホストはPLAYER_START、ゲストはこちらを使う
-const PVP_SPAWN_HOST = { gx: 3, gy: 3 };
-const PVP_SPAWN_GUEST = { gx: 22, gy: 3 }; // 東の増築室(I)、マップの反対側
+// 対戦モード(2人)用のスポーン地点。ゲストは庭側(マップの反対側)
+const PVP_SPAWN_HOST = { gx: 4, gy: 4 };
+const PVP_SPAWN_GUEST = { gx: 24, gy: 29 };
 
-// 敵スポーン定義: 10種類、各1体。部屋ごとに意図的に配置。
-// type は enemies.js の ENEMY_TYPES のキーに対応
+// 敵スポーン定義: 10種類、各1体
 const ENEMY_SPAWNS = [
-  { type: 'grunt',      gx: 10, gy: 3,  room: 'B' },
-  { type: 'rusher',     gx: 3,  gy: 10, room: 'D' },
-  { type: 'bruiser',    gx: 10, gy: 10, room: 'E' },
-  { type: 'sniper',     gx: 16, gy: 3,  room: 'C' },
-  { type: 'gunner',     gx: 17, gy: 5,  room: 'C' },
-  { type: 'heavy',      gx: 17, gy: 11, room: 'F' },
-  { type: 'scout',      gx: 16, gy: 13, room: 'F' },
-  { type: 'guard',      gx: 3,  gy: 17, room: 'G' },
-  { type: 'skirmisher', gx: 12, gy: 10, room: 'E' },
-  { type: 'juggernaut', gx: 11, gy: 17, room: 'H' },
+  { type: 'grunt',      gx: 13, gy: 3,  room: 'B' },
+  { type: 'rusher',     gx: 4,  gy: 11, room: 'D' },
+  { type: 'bruiser',    gx: 16, gy: 17, room: 'F' },
+  { type: 'sniper',     gx: 15, gy: 14, room: 'ベランダ' },
+  { type: 'gunner',     gx: 27, gy: 4,  room: 'C' },
+  { type: 'heavy',      gx: 28, gy: 14, room: 'E' },
+  { type: 'scout',      gx: 14, gy: 22, room: 'G' },
+  { type: 'guard',      gx: 5,  gy: 24, room: 'H' },
+  { type: 'skirmisher', gx: 22, gy: 25, room: '見張り台' },
+  { type: 'juggernaut', gx: 20, gy: 27, room: 'G' },
 ];
 
 // --- チーム戦モード(疑似5vs5)用のスポーン ---
-// 敵チーム: 東側の部屋(C・F・J・I)に配置し、プレイヤー+味方チームが西から進軍する構図にする
 const TEAM_ENEMY_SPAWNS = [
-  { type: 'grunt',  gx: 17, gy: 3,  room: 'C' },
-  { type: 'bruiser', gx: 16, gy: 11, room: 'F' },
-  { type: 'sniper', gx: 21, gy: 10, room: 'J' },
-  { type: 'gunner', gx: 24, gy: 12, room: 'J' },
-  { type: 'scout',  gx: 22, gy: 3,  room: 'I' },
+  { type: 'grunt',   gx: 27, gy: 4,  room: 'C' },
+  { type: 'bruiser', gx: 18, gy: 16, room: 'F' },
+  { type: 'sniper',  gx: 17, gy: 10, room: '2Fデッキ' },
+  { type: 'gunner',  gx: 28, gy: 14, room: 'E' },
+  { type: 'scout',   gx: 25, gy: 23, room: 'G' },
 ];
 
 // 味方チーム(AI、プレイヤーの周囲=スタートルームに配置)
 const TEAM_ALLY_SPAWNS = [
-  { type: 'assault',  gx: 2, gy: 2 },
-  { type: 'scout',    gx: 4, gy: 2 },
-  { type: 'heavy',    gx: 2, gy: 4 },
-  { type: 'marksman', gx: 4, gy: 4 },
+  { type: 'assault',  gx: 3, gy: 3 },
+  { type: 'scout',    gx: 6, gy: 3 },
+  { type: 'heavy',    gx: 3, gy: 5 },
+  { type: 'marksman', gx: 6, gy: 5 },
 ];
 
 function gridToWorld(gx, gy) {
@@ -992,6 +1002,28 @@ function worldToGrid(x, z) {
 function isWalkable(gx, gy) {
   if (gx < 0 || gy < 0 || gx >= GRID_SIZE || gy >= GRID_SIZE) return false;
   return MAP_GRID[gy][gx] === 1;
+}
+
+// 高さの差による移動制限。登れるのは MAX_STEP_UP まで(飛び降りは自由)。
+// これにより、2Fデッキや見張り台の縁が「壁」として機能し、
+// 階段・はしご以外から高所に上がれなくなる(=高さが突然飛ぶ表示バグを防ぐ)。
+function canStepUp(fromX, fromZ, toX, toZ) {
+  return getGroundHeightAt(toX, toZ) - getGroundHeightAt(fromX, fromZ) <= MAX_STEP_UP;
+}
+
+// グリッド上の隣接セル間を移動できるか(経路探索用)。
+// 階段のようにセル中心どうしの高さが離れていても、途中が連続していれば通れる。
+// 逆にデッキの縁のように途中で高さが飛ぶ場所は通れない。
+function canTraverseGrid(gx0, gy0, gx1, gy1) {
+  const N = 8;
+  let prev = getGroundHeightAtGrid(gx0 + 0.5, gy0 + 0.5);
+  for (let i = 1; i <= N; i++) {
+    const t = i / N;
+    const h = getGroundHeightAtGrid(gx0 + 0.5 + (gx1 - gx0) * t, gy0 + 0.5 + (gy1 - gy0) * t);
+    if (h - prev > MAX_STEP_UP) return false;
+    prev = h;
+  }
+  return true;
 }
 
 
@@ -1014,7 +1046,7 @@ function neighbors(node) {
   for (const d of dirs) {
     const gx = node.gx + d.dx;
     const gy = node.gy + d.dy;
-    if (isWalkable(gx, gy)) result.push({ gx, gy });
+    if (isWalkable(gx, gy) && canTraverseGrid(node.gx, node.gy, gx, gy)) result.push({ gx, gy });
   }
   return result;
 }
@@ -2443,7 +2475,11 @@ const EnemyManager = (() => {
       // 進行方向を向かせる
       enemy.mesh.rotation.y = Math.atan2(dir.x, dir.z);
     }
-    enemy.mesh.position.set(enemy.pos.x, getGroundHeightAt(enemy.pos.x, enemy.pos.z), enemy.pos.z);
+    // 高所から降りたときに一瞬でワープして見えないよう、高さは滑らかに追従させる
+    const groundY = getGroundHeightAt(enemy.pos.x, enemy.pos.z);
+    if (enemy.groundY === undefined) enemy.groundY = groundY;
+    enemy.groundY += (groundY - enemy.groundY) * (1 - Math.exp(-12 * dt));
+    enemy.mesh.position.set(enemy.pos.x, enemy.groundY, enemy.pos.z);
     animateLegs(enemy, dt, true);
   }
 
@@ -2787,7 +2823,10 @@ const AllyManager = (() => {
       ally.pos.addScaledVector(dir, step);
       ally.mesh.rotation.y = Math.atan2(dir.x, dir.z);
     }
-    ally.mesh.position.set(ally.pos.x, getGroundHeightAt(ally.pos.x, ally.pos.z), ally.pos.z);
+    const allyGroundY = getGroundHeightAt(ally.pos.x, ally.pos.z);
+    if (ally.groundY === undefined) ally.groundY = allyGroundY;
+    ally.groundY += (allyGroundY - ally.groundY) * (1 - Math.exp(-12 * dt));
+    ally.mesh.position.set(ally.pos.x, ally.groundY, ally.pos.z);
     animateLegs(ally, dt, true);
   }
 
@@ -3485,10 +3524,8 @@ const PvpSystem = (() => {
     buildDoorframes();
     buildColumns();
     buildCrates();
-    buildTruck();
-    buildCar();
+    buildVehicles();
     buildElevatedStructures();
-    buildLadderTower();
     buildDuctProps();
     buildMinimapStatic();
     WeaponSystem.init(camera);
@@ -3645,8 +3682,8 @@ const PvpSystem = (() => {
 
   function buildMap() {
     const obstacleSet = new Set(OBSTACLE_CELLS.map(o => `${o.gx},${o.gy}`));
-    const truckSet = new Set(TRUCK_FOOTPRINT_CELLS.map(o => `${o.gx},${o.gy}`));
-    const carSet = new Set(CAR_FOOTPRINT_CELLS.map(o => `${o.gx},${o.gy}`));
+    const vehicleSet = new Set();
+    VEHICLES.forEach(v => v.cells.forEach(c => vehicleSet.add(`${c.gx},${c.gy}`)));
 
     const floorTex = buildFloorTexture();
     floorTex.repeat.set(GRID_SIZE, GRID_SIZE);
@@ -3662,26 +3699,20 @@ const PvpSystem = (() => {
     const wallMat = new THREE.MeshStandardMaterial({ map: wallTex, roughness: 0.8, metalness: 0.15 });
     wallGroup = new THREE.Group();
 
-    // 高所エリア(階段・2階・ハシゴ等)専用の判定。地上レベルの壁を誤って生成しないための除外に使う
-    const isElevated = (gx, gy) => ELEVATED_CELLS.has(`${gx},${gy}`);
-
     for (let gy = 0; gy < GRID_SIZE; gy++) {
       for (let gx = 0; gx < GRID_SIZE; gx++) {
         if (MAP_GRID[gy][gx] === 0) {
-          // 遮蔽物(クレート)・トラック・車の区画は構造壁として描画しない(別途専用の見た目で描画)
-          if (obstacleSet.has(`${gx},${gy}`) || truckSet.has(`${gx},${gy}`) || carSet.has(`${gx},${gy}`)) continue;
+          // 遮蔽物(クレート)・車両の区画は構造壁として描画しない(別途専用の見た目で描画)
+          if (obstacleSet.has(`${gx},${gy}`) || vehicleSet.has(`${gx},${gy}`)) continue;
           // 完全に孤立した壁(周囲に床が無い)は描画を省略して負荷を減らす。
-          // 高所エリアに隣接しているだけの場合も除外する(地上レベルの壁は不要なため。
-          // 高所エリアの縁取りは別途buildElevatedStructures()で高さに応じたものを描画する)
-          const hasAdjacentFloor =
-            (isWalkable(gx + 1, gy) && !isElevated(gx + 1, gy)) ||
-            (isWalkable(gx - 1, gy) && !isElevated(gx - 1, gy)) ||
-            (isWalkable(gx, gy + 1) && !isElevated(gx, gy + 1)) ||
-            (isWalkable(gx, gy - 1) && !isElevated(gx, gy - 1)) ||
-            (isWalkable(gx + 1, gy + 1) && !isElevated(gx + 1, gy + 1)) ||
-            (isWalkable(gx - 1, gy - 1) && !isElevated(gx - 1, gy - 1)) ||
-            (isWalkable(gx + 1, gy - 1) && !isElevated(gx + 1, gy - 1)) ||
-            (isWalkable(gx - 1, gy + 1) && !isElevated(gx - 1, gy + 1));
+          // 2Fデッキ(高さ3.2 = 壁と同じ)に隣接する壁は、そのままビルの外壁になるので描画する。
+          let hasAdjacentFloor = false;
+          for (let oy = -1; oy <= 1 && !hasAdjacentFloor; oy++) {
+            for (let ox = -1; ox <= 1; ox++) {
+              if (ox === 0 && oy === 0) continue;
+              if (isWalkable(gx + ox, gy + oy)) { hasAdjacentFloor = true; break; }
+            }
+          }
           if (!hasAdjacentFloor) continue;
           const w = gridToWorld(gx, gy);
           const mesh = new THREE.Mesh(wallGeo, wallMat);
@@ -3737,20 +3768,33 @@ const PvpSystem = (() => {
   // ---- 広い部屋の支柱(オフィスビルの構造柱らしい演出。当たり判定あり) ----
   function buildColumns() {
     const colMat = new THREE.MeshStandardMaterial({ color: 0xd8cdb0, roughness: 0.85 }); // 日焼けしたコンクリート風
+    const capMat = new THREE.MeshStandardMaterial({ color: 0xa89a7c, roughness: 0.9 });
+    const placed = [];
     ROOMS.forEach((room) => {
-      if (room.w * room.h < 30) return; // 大部屋のみ
-      const cx = (room.x + room.w / 2 - GRID_SIZE / 2) * CELL_SIZE;
-      const cz = (room.y + room.h / 2 - GRID_SIZE / 2) * CELL_SIZE;
-      [-1, 1].forEach((side) => {
-        const colX = cx + side * CELL_SIZE * 1.3;
-        const col = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.22, 0.22, WALL_HEIGHT, 12),
-          colMat
-        );
-        col.position.set(colX, WALL_HEIGHT / 2, cz);
-        wallGroup.add(col); // 射撃の遮蔽判定にも使うため壁と同じグループに入れる
-        columnObstacles.push({ x: colX, z: cz, radius: 0.22 });
-      });
+      // 幅の狭い通路には柱を置かない(通れなくなるため)
+      if (Math.min(room.w, room.h) < 4) return;
+      if (room.w * room.h < 30) return;
+      const nx = Math.max(1, Math.min(3, Math.round(room.w / 6)));
+      const ny = Math.max(1, Math.min(3, Math.round(room.h / 6)));
+      for (let i = 1; i <= nx; i++) {
+        for (let j = 1; j <= ny; j++) {
+          const gx = Math.floor(room.x + (room.w * i) / (nx + 1));
+          const gy = Math.floor(room.y + (room.h * j) / (ny + 1));
+          // 床が無い・高所エリア・すでに何か置いてある場所は避ける
+          if (!isWalkable(gx, gy)) continue;
+          if (ELEVATED_CELLS.has(`${gx},${gy}`)) continue;
+          if (placed.some(p => Math.abs(p.gx - gx) < 2 && Math.abs(p.gy - gy) < 2)) continue;
+          placed.push({ gx, gy });
+          const w = gridToWorld(gx, gy);
+          const col = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.3, WALL_HEIGHT, 12), colMat);
+          col.position.set(w.x, WALL_HEIGHT / 2, w.z);
+          wallGroup.add(col); // 射撃の遮蔽判定にも使うため壁と同じグループに入れる
+          const cap = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.16, 0.8), capMat);
+          cap.position.set(w.x, WALL_HEIGHT - 0.08, w.z);
+          wallGroup.add(cap);
+          columnObstacles.push({ x: w.x, z: w.z, radius: 0.3 });
+        }
+      }
     });
   }
 
@@ -3792,14 +3836,19 @@ const PvpSystem = (() => {
   }
 
   // ---- トラック(景観・遮蔽物): 荷台とキャンバス屋根フレームを持つ簡易トラック ----
-  function buildTruck() {
-    const cx = (TRUCK_FOOTPRINT_CELLS[0].gx + TRUCK_FOOTPRINT_CELLS[1].gx) / 2 - GRID_SIZE / 2;
-    const cz = TRUCK_FOOTPRINT_CELLS[0].gy - GRID_SIZE / 2;
-    const worldX = (cx + 0.5) * CELL_SIZE;
-    const worldZ = (cz + 0.5) * CELL_SIZE;
+  // 車両の footprint(2マス)からワールド座標を求める
+  function vehicleAnchor(v) {
+    const cx = (v.cells[0].gx + v.cells[1].gx) / 2 - GRID_SIZE / 2;
+    const cz = (v.cells[0].gy + v.cells[1].gy) / 2 - GRID_SIZE / 2;
+    return { x: (cx + 0.5) * CELL_SIZE, z: (cz + 0.5) * CELL_SIZE };
+  }
+
+  function buildTruck(v) {
+    const a = vehicleAnchor(v);
+    const worldX = a.x, worldZ = a.z;
 
     const group = new THREE.Group();
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x5a6058, roughness: 0.7, metalness: 0.3 });
+    const bodyMat = new THREE.MeshStandardMaterial({ color: v.color || 0x5a6058, roughness: 0.7, metalness: 0.3 });
     const bedMat = new THREE.MeshStandardMaterial({ color: 0x7a6a4a, roughness: 0.85 });
     const wheelMat = new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.8 });
     const frameMat = new THREE.MeshStandardMaterial({ color: 0x6a5a3a, roughness: 0.7 });
@@ -3843,19 +3892,18 @@ const PvpSystem = (() => {
     });
 
     group.position.set(worldX, 0, worldZ);
-    group.rotation.y = Math.PI / 2;
+    const horizontal = v.cells[0].gy === v.cells[1].gy;
+    group.rotation.y = horizontal ? Math.PI / 2 : 0;
     wallGroup.add(group); // 遮蔽物として射撃の遮蔽判定にも使う
   }
 
   // ---- 車(景観・遮蔽物): 庭に設置する乗用車 ----
-  function buildCar() {
-    const cx = (CAR_FOOTPRINT_CELLS[0].gx + CAR_FOOTPRINT_CELLS[1].gx) / 2 - GRID_SIZE / 2;
-    const cz = CAR_FOOTPRINT_CELLS[0].gy - GRID_SIZE / 2;
-    const worldX = (cx + 0.5) * CELL_SIZE;
-    const worldZ = (cz + 0.5) * CELL_SIZE;
+  function buildCar(v) {
+    const a = vehicleAnchor(v);
+    const worldX = a.x, worldZ = a.z;
 
     const group = new THREE.Group();
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x7a2828, roughness: 0.4, metalness: 0.4 });
+    const bodyMat = new THREE.MeshStandardMaterial({ color: v.color || 0x7a2828, roughness: 0.4, metalness: 0.4 });
     const glassMat = new THREE.MeshStandardMaterial({ color: 0x2a3038, roughness: 0.2, metalness: 0.6 });
     const wheelMat = new THREE.MeshStandardMaterial({ color: 0x161616, roughness: 0.8 });
     const bumperMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.5, metalness: 0.3 });
@@ -3893,176 +3941,297 @@ const PvpSystem = (() => {
     });
 
     group.position.set(worldX, 0, worldZ);
-    group.rotation.y = 0.15;
+    // footprint の並び方向に合わせて向きを決める(横並びなら車体も横向き)
+    const horizontal = v.cells[0].gy === v.cells[1].gy;
+    group.rotation.y = (horizontal ? Math.PI / 2 : 0) + (v.yaw || 0.15);
     wallGroup.add(group);
   }
 
-  // ---- 立体構造(高所エリア)用の共通ヘルパー ----
-  function gridRectWorldBounds(gx0, gy0, gx1, gy1) {
-    const wA = gridToWorld(gx0, gy0);
-    const wB = gridToWorld(gx1, gy1);
+  // ---- 車両(トラック・車)をまとめて配置する ----
+  function buildVehicles() {
+    VEHICLES.forEach((v) => {
+      if (v.kind === 'truck') buildTruck(v);
+      else buildCar(v);
+    });
+  }
+
+  // ---- 立体構造(高所エリア)のジオメトリ生成 ----
+  // すべて HEIGHT_ZONES のデータから生成する。歩ける高さの式(getGroundHeightAtGrid)と
+  // 同じ計算で見た目を作るため、「見えている段」と「実際に立てる高さ」が必ず一致する。
+
+  // 高さゾーンのワールド座標での範囲
+  function zoneWorldBounds(zone) {
+    const b = zoneBoundsGrid(zone);
     return {
-      minX: Math.min(wA.x, wB.x) - CELL_SIZE / 2,
-      maxX: Math.max(wA.x, wB.x) + CELL_SIZE / 2,
-      minZ: Math.min(wA.z, wB.z) - CELL_SIZE / 2,
-      maxZ: Math.max(wA.z, wB.z) + CELL_SIZE / 2,
+      minX: (b.x0 - GRID_SIZE / 2) * CELL_SIZE,
+      maxX: (b.x1 - GRID_SIZE / 2) * CELL_SIZE,
+      minZ: (b.y0 - GRID_SIZE / 2) * CELL_SIZE,
+      maxZ: (b.y1 - GRID_SIZE / 2) * CELL_SIZE,
     };
   }
 
-  // 2点間を結ぶ手すり・板状のパーツを1本追加する
-  function addRailBox(x1, z1, x2, z2, centerY, height, thickness, mat) {
+  // 手すり1本(上下2段の横棒 + 一定間隔の支柱)
+  function addRailRun(x1, z1, x2, z2, baseY, railH, mat) {
     const dx = x2 - x1, dz = z2 - z1;
-    const length = Math.hypot(dx, dz);
-    if (length < 0.05) return;
-    const box = new THREE.Mesh(new THREE.BoxGeometry(length, height, thickness), mat);
-    box.position.set((x1 + x2) / 2, centerY, (z1 + z2) / 2);
-    box.rotation.y = Math.atan2(-dz, dx);
-    wallGroup.add(box);
-  }
-
-  // 階段・ハシゴの踏み板を、高さゾーンの勾配に沿って並べる
-  function buildRampSteps(zone, stepCount, mat) {
-    const b = gridRectWorldBounds(zone.gx0, zone.gy0, zone.gx1, zone.gy1);
-    const alongY = (zone.gy1 - zone.gy0) >= (zone.gx1 - zone.gx0);
-    for (let i = 0; i < stepCount; i++) {
-      const t = (i + 0.5) / stepCount;
-      const h = zone.h0 + (zone.h1 - zone.h0) * t;
-      const step = new THREE.Mesh(
-        alongY
-          ? new THREE.BoxGeometry((b.maxX - b.minX) * 0.92, 0.12, (b.maxZ - b.minZ) / stepCount * 0.85)
-          : new THREE.BoxGeometry((b.maxX - b.minX) / stepCount * 0.85, 0.12, (b.maxZ - b.minZ) * 0.92),
-        mat
-      );
-      if (alongY) {
-        step.position.set((b.minX + b.maxX) / 2, h, b.minZ + (b.maxZ - b.minZ) * t);
-      } else {
-        step.position.set(b.minX + (b.maxX - b.minX) * t, h, (b.minZ + b.maxZ) / 2);
-      }
-      wallGroup.add(step);
+    const len = Math.hypot(dx, dz);
+    if (len < 0.05) return;
+    const cx = (x1 + x2) / 2, cz = (z1 + z2) / 2;
+    const angle = Math.atan2(-dz, dx);
+    [railH, railH * 0.52].forEach((hy, i) => {
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(len, i === 0 ? 0.1 : 0.06, 0.07), mat);
+      bar.position.set(cx, baseY + hy, cz);
+      bar.rotation.y = angle;
+      wallGroup.add(bar);
+    });
+    const posts = Math.max(2, Math.round(len / 2.6) + 1);
+    for (let i = 0; i < posts; i++) {
+      const t = i / (posts - 1);
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.09, railH, 0.09), mat);
+      post.position.set(x1 + dx * t, baseY + railH / 2, z1 + dz * t);
+      wallGroup.add(post);
     }
   }
 
-  // ---- 2階建てのビル(階段・2階の床・ベランダの手すり・支柱) ----
-  function buildElevatedStructures() {
-    const structMat = new THREE.MeshStandardMaterial({ color: 0xcfc9b8, roughness: 0.8 });
-    const railMat = new THREE.MeshStandardMaterial({ color: 0x4a4438, roughness: 0.55, metalness: 0.3 });
-    const pillarMat = new THREE.MeshStandardMaterial({ color: 0x8f8879, roughness: 0.85 });
-    const stepMat = new THREE.MeshStandardMaterial({ color: 0x9a9384, roughness: 0.8 });
+  // 縁の低い立ち上がり(飛び降りられる開放辺に付ける)
+  function addKerb(x1, z1, x2, z2, baseY, mat) {
+    const dx = x2 - x1, dz = z2 - z1;
+    const len = Math.hypot(dx, dz);
+    if (len < 0.05) return;
+    const kerb = new THREE.Mesh(new THREE.BoxGeometry(len, 0.24, 0.16), mat);
+    kerb.position.set((x1 + x2) / 2, baseY + 0.12, (z1 + z2) / 2);
+    kerb.rotation.y = Math.atan2(-dz, dx);
+    wallGroup.add(kerb);
+  }
 
-    const stairsZone = HEIGHT_ZONES.find(z => z.gx0 === 26 && z.gy0 === 4);
-    const platformZone = HEIGHT_ZONES.find(z => z.type === 'flat' && z.height === 3.2);
+  // 平らな高所ゾーン(2Fデッキ・ベランダ・見張り台)を作る
+  function buildFlatZone(zone, mats) {
+    const b = zoneWorldBounds(zone);
+    const w = b.maxX - b.minX, d = b.maxZ - b.minZ;
+    const cx = (b.minX + b.maxX) / 2, cz = (b.minZ + b.maxZ) / 2;
+    const H = zone.height;
+    const SLAB = 0.3;
 
-    // 2階の床
-    const pb = gridRectWorldBounds(platformZone.gx0, platformZone.gy0, platformZone.gx1, platformZone.gy1);
-    const slab = new THREE.Mesh(
-      new THREE.BoxGeometry(pb.maxX - pb.minX, 0.2, pb.maxZ - pb.minZ),
-      structMat
-    );
-    slab.position.set((pb.minX + pb.maxX) / 2, platformZone.height - 0.1, (pb.minZ + pb.maxZ) / 2);
+    // 床スラブ(上面がちょうど歩ける高さになるように配置する)
+    const slab = new THREE.Mesh(new THREE.BoxGeometry(w, SLAB, d), mats.slab);
+    slab.position.set(cx, H - SLAB / 2, cz);
     wallGroup.add(slab);
 
-    // 支柱(四隅で2階の床を支える。当たり判定も追加)
-    [[pb.minX + 0.3, pb.minZ + 0.3], [pb.maxX - 0.3, pb.minZ + 0.3],
-     [pb.minX + 0.3, pb.maxZ - 0.3], [pb.maxX - 0.3, pb.maxZ - 0.3]].forEach(([px, pz]) => {
-      const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.24, platformZone.height, 10), pillarMat);
-      pillar.position.set(px, platformZone.height / 2, pz);
-      wallGroup.add(pillar);
-      columnObstacles.push({ x: px, z: pz, radius: 0.24 });
-    });
+    // 下部の構造
+    if (zone.support === 'solid') {
+      // ビルの外壁。下まで詰まった箱にして、床が浮いて見えないようにする
+      const body = new THREE.Mesh(new THREE.BoxGeometry(w - 0.12, H - SLAB, d - 0.12), mats.facade);
+      body.position.set(cx, (H - SLAB) / 2, cz);
+      wallGroup.add(body);
+      // 腰壁の帯と窓(のっぺりした箱に見えないようにする)
+      const band = new THREE.Mesh(new THREE.BoxGeometry(w - 0.02, 0.22, d - 0.02), mats.trim);
+      band.position.set(cx, H - SLAB - 0.5, cz);
+      wallGroup.add(band);
+      const winY = (H - SLAB) * 0.58;
+      const nx = Math.max(1, Math.floor(w / 5)), nz = Math.max(1, Math.floor(d / 5));
+      for (let i = 0; i < nx; i++) {
+        const px = b.minX + w * (i + 0.5) / nx;
+        [b.minZ, b.maxZ].forEach((pz) => {
+          const win = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.0, 0.1), mats.window);
+          win.position.set(px, winY, pz);
+          wallGroup.add(win);
+        });
+      }
+      for (let i = 0; i < nz; i++) {
+        const pz = b.minZ + d * (i + 0.5) / nz;
+        [b.minX, b.maxX].forEach((px) => {
+          const win = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.0, 1.5), mats.window);
+          win.position.set(px, winY, pz);
+          wallGroup.add(win);
+        });
+      }
+    } else if (zone.support === 'container') {
+      // 見張り台の土台はコンテナ風。角柱 + 縦リブで金属らしく見せる
+      const body = new THREE.Mesh(new THREE.BoxGeometry(w - 0.3, H - SLAB, d - 0.3), mats.container);
+      body.position.set(cx, (H - SLAB) / 2, cz);
+      wallGroup.add(body);
+      [[b.minX, b.minZ], [b.maxX, b.minZ], [b.minX, b.maxZ], [b.maxX, b.maxZ]].forEach(([px, pz]) => {
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.24, H - SLAB, 0.24), mats.rail);
+        post.position.set(px - Math.sign(px - cx) * 0.12, (H - SLAB) / 2, pz - Math.sign(pz - cz) * 0.12);
+        wallGroup.add(post);
+      });
+      const ribs = Math.floor(w / 0.8);
+      for (let i = 1; i < ribs; i++) {
+        const px = b.minX + (w * i) / ribs;
+        [b.minZ - 0.15, b.maxZ + 0.15].forEach((pz) => {
+          const rib = new THREE.Mesh(new THREE.BoxGeometry(0.1, H - SLAB - 0.3, 0.1), mats.rail);
+          rib.position.set(px, (H - SLAB) / 2, pz);
+          wallGroup.add(rib);
+        });
+      }
+    }
 
-    // ベランダ・2階の手すり(見た目より低く、覗いて狙撃できる高さ)。階段側は開口部を空ける
-    const railH = 1.1;
-    const railY = platformZone.height + railH / 2;
-    const stairsB = gridRectWorldBounds(stairsZone.gx0, stairsZone.gy0, stairsZone.gx1, stairsZone.gy1);
-    addRailBox(pb.minX, pb.minZ, pb.maxX, pb.minZ, railY, railH, 0.1, railMat); // 北
-    addRailBox(pb.minX, pb.minZ, pb.minX, pb.maxZ, railY, railH, 0.1, railMat); // 西
-    addRailBox(pb.maxX, pb.minZ, pb.maxX, pb.maxZ, railY, railH, 0.1, railMat); // 東
-    addRailBox(pb.minX, pb.maxZ, stairsB.minX, pb.maxZ, railY, railH, 0.1, railMat); // 南(階段の手前まで)
-    addRailBox(stairsB.maxX, pb.maxZ, pb.maxX, pb.maxZ, railY, railH, 0.1, railMat); // 南(階段の先から)
-
-    // 階段の踏み板
-    buildRampSteps(stairsZone, 6, stepMat);
-  }
-
-  // ---- ハシゴを登った先の見張り台(ほどほどの高さ) ----
-  function buildLadderTower() {
-    const railMat = new THREE.MeshStandardMaterial({ color: 0x4a4438, roughness: 0.55, metalness: 0.3 });
-    const deckMat = new THREE.MeshStandardMaterial({ color: 0x8a7a5a, roughness: 0.85 });
-    const rungMat = new THREE.MeshStandardMaterial({ color: 0x3a3a3a, roughness: 0.5, metalness: 0.5 });
-
-    const ladderZone = HEIGHT_ZONES.find(z => z.type === 'ramp' && z.h1 === 2.0);
-    const deckZone = HEIGHT_ZONES.find(z => z.type === 'flat' && z.height === 2.0);
-
-    // 見張り台の床
-    const db = gridRectWorldBounds(deckZone.gx0, deckZone.gy0, deckZone.gx1, deckZone.gy1);
-    const deck = new THREE.Mesh(new THREE.BoxGeometry(db.maxX - db.minX, 0.2, db.maxZ - db.minZ), deckMat);
-    deck.position.set((db.minX + db.maxX) / 2, deckZone.height - 0.1, (db.minZ + db.maxZ) / 2);
-    wallGroup.add(deck);
-
-    // 見張り台を支える柱
-    [[db.minX + 0.25, db.minZ + 0.25], [db.maxX - 0.25, db.minZ + 0.25],
-     [db.minX + 0.25, db.maxZ - 0.25], [db.maxX - 0.25, db.maxZ - 0.25]].forEach(([px, pz]) => {
-      const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.15, deckZone.height, 8), railMat);
-      pillar.position.set(px, deckZone.height / 2, pz);
-      wallGroup.add(pillar);
-      columnObstacles.push({ x: px, z: pz, radius: 0.15 });
-    });
-
-    // 見張り台の手すり(ハシゴ側は開口部を空ける、周りが見渡せるようやや低め)
-    const railH = 0.9;
-    const railY = deckZone.height + railH / 2;
-    const ladderB = gridRectWorldBounds(ladderZone.gx0, ladderZone.gy0, ladderZone.gx1, ladderZone.gy1);
-    addRailBox(db.minX, db.minZ, db.maxX, db.minZ, railY, railH, 0.08, railMat); // 北(ハシゴ反対側)
-    addRailBox(db.minX, db.minZ, db.minX, db.maxZ, railY, railH, 0.08, railMat); // 西
-    addRailBox(db.maxX, db.minZ, db.maxX, db.maxZ, railY, railH, 0.08, railMat); // 東
-    // 南はハシゴの開口部(ladderBの幅ぶんだけ空ける)。残りがあれば埋める
-    if (ladderB.minX - db.minX > 0.1) addRailBox(db.minX, db.maxZ, ladderB.minX, db.maxZ, railY, railH, 0.08, railMat);
-    if (db.maxX - ladderB.maxX > 0.1) addRailBox(ladderB.maxX, db.maxZ, db.maxX, db.maxZ, railY, railH, 0.08, railMat);
-
-    // ハシゴの横の縦レール2本+踏み段(ラング)
-    const ladderCenterX = (ladderB.minX + ladderB.maxX) / 2;
-    [-0.5, 0.5].forEach((side) => {
-      const rail = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.035, 0.035, ladderZone.h1 - ladderZone.h0, 6),
-        rungMat
-      );
-      rail.position.set(ladderCenterX + side * (ladderB.maxX - ladderB.minX) * 0.4, (ladderZone.h0 + ladderZone.h1) / 2, (ladderB.minZ + ladderB.maxZ) / 2);
-      wallGroup.add(rail);
-    });
-    buildRampSteps(ladderZone, 7, rungMat);
-  }
-
-  // ---- 裏ルート(ダクト)の演出: 低い天板+リブでトンネルらしさを出す ----
-  function buildDuctProps() {
-    const ductMat = new THREE.MeshStandardMaterial({ color: 0x6a7278, roughness: 0.5, metalness: 0.6 });
-    const ductH = 2.1; // 屈まないと通れないような、やや低い天井
-    const ductCells = [
-      { x: 9, y: 5, w: 1, h: 3 },
-      { x: 19, y: 8, w: 1, h: 2 },
-      { x: 19, y: 8, w: 7, h: 1 },
-      { x: 17, y: 21, w: 3, h: 1 },
+    // ---- 縁の手すり ----
+    // 外側のセルの高さを調べ、段差がほとんど無い辺(階段の取り付き・隣のデッキ)は開けておく。
+    // これで「上がってこられる場所」と「手すりの切れ目」が必ず一致する。
+    const gb = zoneBoundsGrid(zone);
+    const open = zone.openSides || [];
+    const sides = [
+      { name: 'north', fixed: 'y', at: gb.y0, outside: gb.y0 - 0.5, from: gb.x0, to: gb.x1 },
+      { name: 'south', fixed: 'y', at: gb.y1, outside: gb.y1 + 0.5, from: gb.x0, to: gb.x1 },
+      { name: 'west',  fixed: 'x', at: gb.x0, outside: gb.x0 - 0.5, from: gb.y0, to: gb.y1 },
+      { name: 'east',  fixed: 'x', at: gb.x1, outside: gb.x1 + 0.5, from: gb.y0, to: gb.y1 },
     ];
-    ductCells.forEach((rect) => {
-      for (let iy = rect.y; iy < rect.y + rect.h; iy++) {
-        for (let ix = rect.x; ix < rect.x + rect.w; ix++) {
-          const w = gridToWorld(ix, iy);
-          const lid = new THREE.Mesh(new THREE.BoxGeometry(CELL_SIZE * 0.98, 0.08, CELL_SIZE * 0.98), ductMat);
-          lid.position.set(w.x, ductH, w.z);
-          wallGroup.add(lid);
-          // リブ(補強のリング)を等間隔に
-          if ((ix + iy) % 2 === 0) {
-            const rib = new THREE.Mesh(new THREE.TorusGeometry(CELL_SIZE * 0.42, 0.04, 6, 12), ductMat);
-            rib.rotation.x = Math.PI / 2;
-            rib.position.set(w.x, ductH - 0.6, w.z);
-            wallGroup.add(rib);
+    sides.forEach((s) => {
+      let runStart = null;
+      for (let i = s.from; i <= s.to; i++) {
+        const isLast = (i === s.to);
+        let needs = false;
+        if (!isLast) {
+          const mid = i + 0.5;
+          const hOut = s.fixed === 'y'
+            ? getGroundHeightAtGrid(mid, s.outside)
+            : getGroundHeightAtGrid(s.outside, mid);
+          needs = Math.abs(hOut - H) > 0.6; // 段差がある = 落ちる縁なので囲う
+        }
+        if (needs && runStart === null) runStart = i;
+        if ((!needs || isLast) && runStart !== null) {
+          const a = runStart, bEnd = isLast && needs ? s.to : i;
+          const toWorld = (gx, gy) => ({
+            x: (gx - GRID_SIZE / 2) * CELL_SIZE,
+            z: (gy - GRID_SIZE / 2) * CELL_SIZE,
+          });
+          const p1 = s.fixed === 'y' ? toWorld(a, s.at) : toWorld(s.at, a);
+          const p2 = s.fixed === 'y' ? toWorld(bEnd, s.at) : toWorld(s.at, bEnd);
+          if (open.includes(s.name)) {
+            addKerb(p1.x, p1.z, p2.x, p2.z, H, mats.trim);
+          } else {
+            addRailRun(p1.x, p1.z, p2.x, p2.z, H, zone.railHeight || 1.0, mats.rail);
           }
+          runStart = null;
         }
       }
     });
   }
 
+  // 傾いた板を1枚置く(始点と終点の高さをそのまま結ぶので、歩ける面と完全に一致する)
+  function addSlopeSlab(zone, width, thickness, offsetY, mat) {
+    const b = zoneWorldBounds(zone);
+    const alongX = zone.axis === 'x';
+    const run = alongX ? (b.maxX - b.minX) : (b.maxZ - b.minZ);
+    const rise = zone.h1 - zone.h0;
+    const len = Math.hypot(run, rise);
+    const geo = alongX
+      ? new THREE.BoxGeometry(len, thickness, width)
+      : new THREE.BoxGeometry(width, thickness, len);
+    const slab = new THREE.Mesh(geo, mat);
+    slab.position.set((b.minX + b.maxX) / 2, (zone.h0 + zone.h1) / 2 + offsetY, (b.minZ + b.maxZ) / 2);
+    if (alongX) slab.rotation.z = Math.atan2(rise, run);
+    else slab.rotation.x = -Math.atan2(rise, run);
+    wallGroup.add(slab);
+    return slab;
+  }
+
+  // ランプ上の位置(t=0〜1)のワールド座標と高さ
+  function rampPointAt(zone, t) {
+    const b = zoneWorldBounds(zone);
+    const alongX = zone.axis === 'x';
+    return {
+      x: alongX ? b.minX + (b.maxX - b.minX) * t : (b.minX + b.maxX) / 2,
+      z: alongX ? (b.minZ + b.maxZ) / 2 : b.minZ + (b.maxZ - b.minZ) * t,
+      y: zone.h0 + (zone.h1 - zone.h0) * t,
+    };
+  }
+
+  // 階段・はしご階段を作る
+  function buildRampZone(zone, mats) {
+    const b = zoneWorldBounds(zone);
+    const alongX = zone.axis === 'x';
+    const run = alongX ? (b.maxX - b.minX) : (b.maxZ - b.minZ);
+    const width = (alongX ? (b.maxZ - b.minZ) : (b.maxX - b.minX));
+    const rise = Math.abs(zone.h1 - zone.h0);
+    const isLadder = zone.style === 'ladder';
+    const treadMat = isLadder ? mats.rail : mats.step;
+
+    // 斜路の本体。歩ける面とぴったり同じ傾きの板
+    addSlopeSlab(zone, width * 0.88, 0.22, -0.11, mats.step);
+
+    // 踏み板の縁(ノージング)。薄い板を等間隔に並べて階段らしく見せる。
+    // 面そのものは斜路なので、高さのズレは板の厚み(0.07)だけで済む
+    const stepCount = Math.max(4, Math.round(Math.hypot(run, rise) / (isLadder ? 0.62 : 0.95)));
+    for (let i = 1; i < stepCount; i++) {
+      const t = i / stepCount;
+      const p = rampPointAt(zone, t);
+      const geo = alongX
+        ? new THREE.BoxGeometry(isLadder ? 0.14 : 0.2, 0.07, width * 0.86)
+        : new THREE.BoxGeometry(width * 0.86, 0.07, isLadder ? 0.14 : 0.2);
+      const nose = new THREE.Mesh(geo, treadMat);
+      nose.position.set(p.x, p.y + 0.035, p.z);
+      wallGroup.add(nose);
+    }
+
+    // 両側の側桁(ストリンガー)
+    [-1, 1].forEach((side) => {
+      const s = addSlopeSlab(zone, 0.16, 0.42, -0.12, mats.stringer);
+      if (alongX) s.position.z += side * width * 0.45;
+      else s.position.x += side * width * 0.45;
+    });
+
+    // 手すり(斜路と同じ傾きで、少し上に浮かせる)
+    [-1, 1].forEach((side) => {
+      const r = addSlopeSlab(zone, 0.09, 0.09, 1.02, mats.rail);
+      if (alongX) r.position.z += side * width * 0.42;
+      else r.position.x += side * width * 0.42;
+      // 手すりの支柱
+      const postCount = 4;
+      for (let i = 0; i <= postCount; i++) {
+        const t = i / postCount;
+        const p = rampPointAt(zone, t);
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.05, 0.08), mats.rail);
+        post.position.set(
+          p.x + (alongX ? 0 : side * width * 0.42),
+          p.y + 0.52,
+          p.z + (alongX ? side * width * 0.42 : 0)
+        );
+        wallGroup.add(post);
+      }
+    });
+  }
+
+  function buildElevatedStructures() {
+    const mats = {
+      slab:      new THREE.MeshStandardMaterial({ color: 0xcfc9b8, roughness: 0.8 }),
+      facade:    new THREE.MeshStandardMaterial({ color: 0xbdb49f, roughness: 0.9 }),
+      trim:      new THREE.MeshStandardMaterial({ color: 0x6f6857, roughness: 0.75 }),
+      window:    new THREE.MeshStandardMaterial({ color: 0x2f3a40, roughness: 0.25, metalness: 0.6 }),
+      container: new THREE.MeshStandardMaterial({ color: 0x4a6b56, roughness: 0.75, metalness: 0.2 }),
+      rail:      new THREE.MeshStandardMaterial({ color: 0x4a4438, roughness: 0.5, metalness: 0.45 }),
+      step:      new THREE.MeshStandardMaterial({ color: 0x9a9384, roughness: 0.8 }),
+      stringer:  new THREE.MeshStandardMaterial({ color: 0x6b6558, roughness: 0.7, metalness: 0.2 }),
+    };
+    // 下部構造(スラブ・外壁)を先に、手すりを後に作ると重なりが目立ちにくい
+    HEIGHT_ZONES.filter(z => z.type === 'flat').forEach(z => buildFlatZone(z, mats));
+    HEIGHT_ZONES.filter(z => z.type === 'ramp').forEach(z => buildRampZone(z, mats));
+  }
+
+  // ---- 裏ルート(ダクト)の演出: 低い天板+リブでトンネルらしさを出す ----
+  function buildDuctProps() {
+    const ductMat = new THREE.MeshStandardMaterial({ color: 0x6a7278, roughness: 0.5, metalness: 0.6 });
+    const ductH = 2.15; // 屈まないと通れないような、やや低い天井
+    DUCT_CELLS.forEach((key) => {
+      const [ix, iy] = key.split(',').map(Number);
+      const w = gridToWorld(ix, iy);
+      const lid = new THREE.Mesh(new THREE.BoxGeometry(CELL_SIZE * 0.98, 0.1, CELL_SIZE * 0.98), ductMat);
+      lid.position.set(w.x, ductH, w.z);
+      wallGroup.add(lid);
+      if ((ix + iy) % 2 === 0) {
+        const rib = new THREE.Mesh(new THREE.TorusGeometry(CELL_SIZE * 0.42, 0.05, 6, 12), ductMat);
+        rib.rotation.x = Math.PI / 2;
+        rib.position.set(w.x, ductH - 0.55, w.z);
+        wallGroup.add(rib);
+      }
+    });
+  }
+
   // ---- 衝突判定つき移動 ----
-  function canStandAt(x, z) {
+  function canStandAt(x, z, fromX, fromZ) {
+    // 高さの差が大きいところ(2Fデッキ・見張り台の縁)は登れない。
+    // 飛び降りは自由なので、上から下へは通れる。
+    if (fromX !== undefined && !canStepUp(fromX, fromZ, x, z)) return false;
     const r = PLAYER_RADIUS;
     const pts = [
       [x - r, z - r], [x + r, z - r], [x - r, z + r], [x + r, z + r],
@@ -4080,13 +4249,29 @@ const PvpSystem = (() => {
     return true;
   }
 
+  // ---- カメラの高さ ----
+  // 階段では滑らかに追従し、高所から飛び降りたときは落ちるように少し遅れて追従する。
+  // 生の地面高さをそのまま入れると、段差でカメラが瞬間移動して見えるため。
+  let cameraGroundY = 0;
+  function snapCameraToPlayer() {
+    cameraGroundY = getGroundHeightAt(playerPos.x, playerPos.z);
+    camera.position.set(playerPos.x, EYE_HEIGHT + cameraGroundY, playerPos.z);
+  }
+  function updateCameraHeight(dt) {
+    const target = getGroundHeightAt(playerPos.x, playerPos.z);
+    const rate = target > cameraGroundY ? 26 : 10; // 上りは即座に、下りは落下感を出す
+    cameraGroundY += (target - cameraGroundY) * (1 - Math.exp(-rate * dt));
+    if (Math.abs(target - cameraGroundY) < 0.005) cameraGroundY = target;
+    camera.position.set(playerPos.x, EYE_HEIGHT + cameraGroundY, playerPos.z);
+  }
+
   function movePlayer(dx, dz) {
     const x = playerPos.x, z = playerPos.z;
-    if (canStandAt(x + dx, z + dz)) {
+    if (canStandAt(x + dx, z + dz, x, z)) {
       playerPos.x += dx; playerPos.z += dz;
-    } else if (canStandAt(x + dx, z)) {
+    } else if (canStandAt(x + dx, z, x, z)) {
       playerPos.x += dx;
-    } else if (canStandAt(x, z + dz)) {
+    } else if (canStandAt(x, z + dz, x, z)) {
       playerPos.z += dz;
     }
   }
@@ -4430,7 +4615,7 @@ const PvpSystem = (() => {
     const startWorld = gridToWorld(PLAYER_START.gx, PLAYER_START.gy);
     playerPos.set(startWorld.x, 0, startWorld.z);
     playerVelX = 0; playerVelZ = 0;
-    camera.position.set(playerPos.x, EYE_HEIGHT + getGroundHeightAt(playerPos.x, playerPos.z), playerPos.z);
+    snapCameraToPlayer();
     playerHP = PLAYER_MAX_HP;
     updateHpHud();
 
@@ -4651,7 +4836,7 @@ const PvpSystem = (() => {
     const startWorld = gridToWorld(spawnGrid.gx, spawnGrid.gy);
     playerPos.set(startWorld.x, 0, startWorld.z);
     playerVelX = 0; playerVelZ = 0;
-    camera.position.set(playerPos.x, EYE_HEIGHT + getGroundHeightAt(playerPos.x, playerPos.z), playerPos.z);
+    snapCameraToPlayer();
     playerHP = PLAYER_MAX_HP;
     updateHpHud();
 
@@ -4745,7 +4930,7 @@ const PvpSystem = (() => {
     const startWorld = gridToWorld(spawnGrid.gx, spawnGrid.gy);
     playerPos.set(startWorld.x, 0, startWorld.z);
     playerVelX = 0; playerVelZ = 0;
-    camera.position.set(playerPos.x, EYE_HEIGHT + getGroundHeightAt(playerPos.x, playerPos.z), playerPos.z);
+    snapCameraToPlayer();
     playerHP = PLAYER_MAX_HP;
     updateHpHud();
 
@@ -4857,7 +5042,7 @@ const PvpSystem = (() => {
       if (playerVelX !== 0 || playerVelZ !== 0) {
         movePlayer(playerVelX * dt, playerVelZ * dt);
       }
-      camera.position.set(playerPos.x, EYE_HEIGHT + getGroundHeightAt(playerPos.x, playerPos.z), playerPos.z);
+      updateCameraHeight(dt);
 
       // 足踏みが確定するたびに足音を鳴らす
       if (SensorSystem.state.footstepCount !== lastFootstepCount) {
@@ -4887,7 +5072,7 @@ const PvpSystem = (() => {
             const w = gridToWorld(spawnGrid.gx, spawnGrid.gy);
             playerPos.set(w.x, 0, w.z);
             playerVelX = 0; playerVelZ = 0;
-            camera.position.set(playerPos.x, EYE_HEIGHT + getGroundHeightAt(playerPos.x, playerPos.z), playerPos.z);
+            snapCameraToPlayer();
             playerHP = PLAYER_MAX_HP;
             updateHpHud();
           }
