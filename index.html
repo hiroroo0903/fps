@@ -1132,13 +1132,34 @@ const SensorSystem = (() => {
   // 低域通過フィルタ推定値(重力方向・姿勢のベースライン)
   let lpX = 0, lpY = 0, lpZ = 0, lpInit = false;
 
+  // ヨー(左右)の急な飛び値を抑えるための状態。
+  // 端末を垂直に近い姿勢で構えたとき(beta≈90°付近)、方位角(alpha/コンパス)の
+  // 計算が数学的・センサー的に不安定になり、実際には回転していないのに
+  // 1フレームで大きくジャンプすることがある(iOSの既知の問題)。
+  // 人間が実際にスマホを振る速さでは起こり得ない大きさの変化だけを検出し、
+  // その回だけ変化量を制限することで、見た目の「急に右に飛ぶ」動きを抑える。
+  let smoothedYawRad = 0;
+  let yawTrackInitialized = false;
+  const MAX_YAW_STEP_RAD = THREE.MathUtils.degToRad(20); // 1イベントあたりの最大ヨー変化量
+
+  function angleDiffRad(target, current) {
+    let d = (target - current) % (Math.PI * 2);
+    if (d > Math.PI) d -= Math.PI * 2;
+    if (d < -Math.PI) d += Math.PI * 2;
+    return d;
+  }
+
+  function resetYawTracking(initialYawRad) {
+    smoothedYawRad = initialYawRad;
+    yawTrackInitialized = true;
+  }
+
   function updateDerivedState(rawQ) {
     // 校正時の姿勢を基準にした相対姿勢(ヨー・ピッチ・ロールすべてが校正の対象)
     const rel = calibrationInverse.clone().multiply(rawQ);
 
     // 移動方向・見た目の向き: 実際の3Dベクトル(見ている方向)をrelから求める。
     const fwd3 = new THREE.Vector3(0, 0, -1).applyQuaternion(rel);
-    const right3 = new THREE.Vector3(1, 0, 0).applyQuaternion(rel);
 
     // カメラの姿勢は、relをそのまま使わず「見ている方向(fwd3)」からヨー・ピッチだけで
     // 組み直す(ロール成分を意図的に捨てる)。
@@ -1147,13 +1168,24 @@ const SensorSystem = (() => {
     // (レティクルを中心にした画面の回転)」として現れてしまう。人がスマホを傾けて
     // 上下を見るときにロールが生じるのは不自然なので、常にロール0のカメラ(一般的な
     // FPSゲームと同じ、ヨー・ピッチのみのカメラ)として再構築する。
-    const yaw = Math.atan2(-fwd3.x, -fwd3.z);
+    const rawYaw = Math.atan2(-fwd3.x, -fwd3.z);
     const PITCH_LIMIT = THREE.MathUtils.degToRad(89.5); // 真上/真下ちょうどでの特異点を避ける
     const pitch = THREE.MathUtils.clamp(
       Math.asin(THREE.MathUtils.clamp(fwd3.y, -1, 1)),
       -PITCH_LIMIT,
       PITCH_LIMIT
     );
+
+    // ヨーは急なジャンプを1フレームあたりMAX_YAW_STEP_RADまでに制限してから採用する。
+    if (!yawTrackInitialized) {
+      resetYawTracking(rawYaw);
+    } else {
+      const diff = angleDiffRad(rawYaw, smoothedYawRad);
+      const clampedDiff = THREE.MathUtils.clamp(diff, -MAX_YAW_STEP_RAD, MAX_YAW_STEP_RAD);
+      smoothedYawRad += clampedDiff;
+    }
+    const yaw = smoothedYawRad;
+
     const cameraEuler = new THREE.Euler(pitch, yaw, 0, 'YXZ');
     state.quaternion.setFromEuler(cameraEuler);
 
@@ -1164,14 +1196,17 @@ const SensorSystem = (() => {
     state.pitchDeg = THREE.MathUtils.radToDeg(pitch);
     state.rollDeg = 0;
 
-    // 移動用ベクトルは水平面に投影して求める(カメラの見た目の向きと走る方向を一致させる)。
-    fwd3.y = 0;
-    if (fwd3.lengthSq() > 1e-6) fwd3.normalize(); else fwd3.set(0, 0, -1);
-    right3.y = 0;
-    if (right3.lengthSq() > 1e-6) right3.normalize(); else right3.set(1, 0, 0);
+    // 移動用ベクトルは、実際にカメラが向いている方向(制限後のyaw・pitch)から
+    // 一貫して求める(見た目の向きと走る方向を必ず一致させるため)。
+    const fwdFromCamera = new THREE.Vector3(0, 0, -1).applyQuaternion(state.quaternion);
+    const rightFromCamera = new THREE.Vector3(1, 0, 0).applyQuaternion(state.quaternion);
+    fwdFromCamera.y = 0;
+    if (fwdFromCamera.lengthSq() > 1e-6) fwdFromCamera.normalize(); else fwdFromCamera.set(0, 0, -1);
+    rightFromCamera.y = 0;
+    if (rightFromCamera.lengthSq() > 1e-6) rightFromCamera.normalize(); else rightFromCamera.set(1, 0, 0);
 
-    state.forward.copy(fwd3);
-    state.right.copy(right3);
+    state.forward.copy(fwdFromCamera);
+    state.right.copy(rightFromCamera);
   }
 
   function handleOrientation(event) {
@@ -1309,6 +1344,8 @@ const SensorSystem = (() => {
     calibrationInverse.copy(base).invert();
     state.calibrated = true;
     state.debugLastCalibrateYawDeg = 0; // 校正直後は差分0
+    // 再校正のたびにヨーのレート制限をリセットし、正面へ即座に向き直せるようにする
+    yawTrackInitialized = false;
     // 次のイベントを待たず、この瞬間の姿勢を即座に反映する
     updateDerivedState(base);
   }
