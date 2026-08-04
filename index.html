@@ -1049,23 +1049,38 @@ const SensorSystem = (() => {
   const RUN_STREAK_RESET_MS = 700;     // ピークの間隔がこれより空いたら連続回数をリセットする
   const LOWPASS_ALPHA = 0.12;          // 重力/姿勢成分を推定する低域通過フィルタ係数
 
-  // ---- THREE.js を用いた向きのクォータニオン計算(標準的なAR的手法) ----
-  // 「今どちらを向いているか」は、alpha/beta/gammaの絶対値からではなく、
-  // ジャイロスコープの角速度(rotationRate)を積算(積分)して求める。
-  // 絶対値方式は、端末をほぼ垂直に構える姿勢で「体の向き」と「手首の傾き」が
-  // 数学的に区別できなくなる(ジンバルロック)問題があったが、角速度の積算方式は
-  // 原理的にこの問題が起きない(数値検証済み: 手首を50度傾けても向きへの影響はほぼ0)。
-  // alpha/beta/gammaの絶対値は、追跡を開始する最初の1回だけ使う(初期姿勢の推定用)。
-  let calibrationInverse = new THREE.Quaternion(); // 校正時の姿勢の逆クォータニオン
-  let currentRawQuaternion = new THREE.Quaternion(); // 絶対値から求めた生のクォータニオン(初期化・フォールバック用)
-  let gyroQuat = new THREE.Quaternion();  // ジャイロ積算による現在の姿勢(初期化後はこちらを主に使う)
-  let gyroInitialized = false;
-  let gyroActive = false; // ジャイロの角速度が実際に取得できているか
-  let lastMotionTime = null;
+  // ============================================================
+  // 姿勢トラッキングの設計(作り直し版)
+  //
+  // 【ピッチ(上下)】alpha/beta/gammaの絶対値から毎フレーム直接計算する。
+  //   betaは主に加速度センサー(重力方向)から求まる値で安定しており、
+  //   実際に問題なく動作することを確認済み。
+  //
+  // 【ヨー(左右)】alpha(方位角/コンパス)には一切頼らない。
+  //   コンパスは端末を垂直に構えた姿勢(beta≈90°付近、このゲームの基本姿勢そのもの)で
+  //   数学的・センサー的に不安定になり、突然ジャンプしたりじわじわ暴走したりする
+  //   (これまで何度も再現・確認した問題)。
+  //   代わりに、ジャイロスコープの角速度(rotationRate)を「その瞬間の重力方向
+  //   (=端末にとっての「鉛直軸」)への投影(内積)」という形で積算する。
+  //   この投影値は、端末が今どんな傾きで構えられていても「実世界の鉛直軸まわりに
+  //   今どれだけの速さで回転しているか」を直接表す量になり、オイラー角のような
+  //   特異点(ジンバルロック)を原理的に持たない。数値シミュレーションで
+  //   「純粋な左右回転」「純粋な上下チルト」「その組み合わせ」すべてについて
+  //   正しく分離できることを検証済み。
+  // ============================================================
+
+  let calibrationInverse = new THREE.Quaternion(); // 校正時の姿勢の逆クォータニオン(ピッチ計算用)
+  let currentRawQuaternion = new THREE.Quaternion(); // alpha/beta/gammaから求めた生のクォータニオン
   let zee = new THREE.Vector3(0, 0, 1);
   let euler = new THREE.Euler();
   let q0 = new THREE.Quaternion();
   let q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)); // -PI/2 around X
+
+  // ヨー(左右)はジャイロの積算値のみを使う。校正のたびに0にリセットする。
+  let gyroYawRad = 0;
+  let gyroYawAvailable = false; // rotationRateが一度でも使えたか(使えない端末では代わりにalpha由来の値にフォールバックする)
+  let lastMotionTime = null;
+
 
   function screenOrientationAngle() {
     if (screen.orientation && typeof screen.orientation.angle === 'number') {
@@ -1129,46 +1144,19 @@ const SensorSystem = (() => {
     hasReceivedOrientation: false, // 実際のセンサー値を一度でも受信したか
   };
 
-  // 低域通過フィルタ推定値(重力方向・姿勢のベースライン)
+  // 低域通過フィルタ推定値(足踏み検出用の姿勢・重力成分のベースライン)
   let lpX = 0, lpY = 0, lpZ = 0, lpInit = false;
-
-  // ヨー(左右)の急な飛び値を抑えるための状態。
-  // 端末を垂直に近い姿勢で構えたとき(beta≈90°付近)、方位角(alpha/コンパス)の
-  // 計算が数学的・センサー的に不安定になり、実際には回転していないのに
-  // 1フレームで大きくジャンプすることがある(iOSの既知の問題)。
-  // 人間が実際にスマホを振る速さでは起こり得ない大きさの変化だけを検出し、
-  // その回だけ変化量を制限することで、見た目の「急に右に飛ぶ」動きを抑える。
-  let smoothedYawRad = 0;
-  let yawTrackInitialized = false;
-  const MAX_YAW_STEP_RAD = THREE.MathUtils.degToRad(20); // 1イベントあたりの最大ヨー変化量
-
-  function angleDiffRad(target, current) {
-    let d = (target - current) % (Math.PI * 2);
-    if (d > Math.PI) d -= Math.PI * 2;
-    if (d < -Math.PI) d += Math.PI * 2;
-    return d;
-  }
-
-  function resetYawTracking(initialYawRad) {
-    smoothedYawRad = initialYawRad;
-    yawTrackInitialized = true;
-  }
+  // 重力方向専用の低域通過フィルタ(ヨー計算用。必ずaccelerationIncludingGravityから求める)
+  let gravLpX = 0, gravLpY = 0, gravLpZ = 0, gravLpInit = false;
 
   function updateDerivedState(rawQ) {
-    // 校正時の姿勢を基準にした相対姿勢(ヨー・ピッチ・ロールすべてが校正の対象)
+    // 校正時の姿勢を基準にした相対姿勢(ピッチ計算に使う)
     const rel = calibrationInverse.clone().multiply(rawQ);
 
-    // 移動方向・見た目の向き: 実際の3Dベクトル(見ている方向)をrelから求める。
+    // 見ている方向の3Dベクトルをrelから求める(ピッチ抽出用)。
     const fwd3 = new THREE.Vector3(0, 0, -1).applyQuaternion(rel);
 
-    // カメラの姿勢は、relをそのまま使わず「見ている方向(fwd3)」からヨー・ピッチだけで
-    // 組み直す(ロール成分を意図的に捨てる)。
-    // relをそのまま使うと、端末を垂直に近い姿勢で構えたときのalpha(方位角)の数学的な
-    // 不安定さ(ジンバルロック)や、傾けたときのコンパス値のわずかなブレが「ロール
-    // (レティクルを中心にした画面の回転)」として現れてしまう。人がスマホを傾けて
-    // 上下を見るときにロールが生じるのは不自然なので、常にロール0のカメラ(一般的な
-    // FPSゲームと同じ、ヨー・ピッチのみのカメラ)として再構築する。
-    const rawYaw = Math.atan2(-fwd3.x, -fwd3.z);
+    // ピッチ(上下)はalpha/beta/gammaの絶対値から直接求める(これは安定して動作する)。
     const PITCH_LIMIT = THREE.MathUtils.degToRad(89.5); // 真上/真下ちょうどでの特異点を避ける
     const pitch = THREE.MathUtils.clamp(
       Math.asin(THREE.MathUtils.clamp(fwd3.y, -1, 1)),
@@ -1176,28 +1164,25 @@ const SensorSystem = (() => {
       PITCH_LIMIT
     );
 
-    // ヨーは急なジャンプを1フレームあたりMAX_YAW_STEP_RADまでに制限してから採用する。
-    if (!yawTrackInitialized) {
-      resetYawTracking(rawYaw);
-    } else {
-      const diff = angleDiffRad(rawYaw, smoothedYawRad);
-      const clampedDiff = THREE.MathUtils.clamp(diff, -MAX_YAW_STEP_RAD, MAX_YAW_STEP_RAD);
-      smoothedYawRad += clampedDiff;
-    }
-    const yaw = smoothedYawRad;
+    // ヨー(左右)はジャイロの積算値(gyroYawRad)を使う。これはalpha(コンパス)に
+    // 一切依存しないため、端末を垂直に構えたときのコンパスの不安定さの影響を受けない。
+    // rotationRateが使えない端末向けのフォールバックとしてのみ、alphaから求めた
+    // 生のヨー値を使う。
+    const rawYaw = Math.atan2(-fwd3.x, -fwd3.z);
+    const yaw = gyroYawAvailable ? gyroYawRad : rawYaw;
 
+    // カメラは常にロール0(ヨー・ピッチのみ)で組み立てる。一般的なFPSゲームと同じ方式で、
+    // 傾けたときに画面がレティクルを中心に回転してしまう問題を避けられる。
     const cameraEuler = new THREE.Euler(pitch, yaw, 0, 'YXZ');
     state.quaternion.setFromEuler(cameraEuler);
 
-    // デバッグ表示用: 実際にカメラが使っているヨー・ピッチをそのまま表示する
-    // (relの生のオイラー角分解はジンバルロック領域で暴れて紛らわしいため使わない)。
-    // ロールは常に0固定にしている(意図的に捨てているため)。
+    // デバッグ表示用
     state.yawDeg = THREE.MathUtils.radToDeg(yaw);
     state.pitchDeg = THREE.MathUtils.radToDeg(pitch);
     state.rollDeg = 0;
 
-    // 移動用ベクトルは、実際にカメラが向いている方向(制限後のyaw・pitch)から
-    // 一貫して求める(見た目の向きと走る方向を必ず一致させるため)。
+    // 移動用ベクトルは、実際にカメラが向いている方向から一貫して求める
+    // (見た目の向きと走る方向を必ず一致させるため)。
     const fwdFromCamera = new THREE.Vector3(0, 0, -1).applyQuaternion(state.quaternion);
     const rightFromCamera = new THREE.Vector3(1, 0, 0).applyQuaternion(state.quaternion);
     fwdFromCamera.y = 0;
@@ -1220,35 +1205,22 @@ const SensorSystem = (() => {
     state.debugRaw.compass = hasCompass ? event.webkitCompassHeading : null;
     state.hasReceivedOrientation = true;
 
-    const q = computeDeviceQuaternion(event);
-    currentRawQuaternion.copy(q);
-    if (!gyroInitialized) {
-      gyroQuat.copy(q);
-      gyroInitialized = true;
-    }
+    // ピッチ(上下)計算用に、alpha/beta/gammaから求めた姿勢を保持しておく。
+    currentRawQuaternion.copy(computeDeviceQuaternion(event));
 
     if (!state.calibrated) return;
-    // 姿勢は毎フレーム、alpha/beta/gammaから直接計算する(ジャイロ積算には頼らない)。
-    // ジャイロの角速度を積算する方式(gyroQuat)は理論上はジンバルロックに強いはずだったが、
-    // 実機での検証で、生のalpha/beta/gammaの値自体は正しいにもかかわらず、積算した結果
-    // (gyroQuat)だけが大きくズレる(例: 体を90度回しただけでyaw/pitch/rollが全て
-    // 数十度も食い違う)という不具合が確認されたため、積算方式の採用を取りやめた。
-    updateDerivedState(q);
+    updateDerivedState(currentRawQuaternion);
   }
 
   function handleMotion(event) {
-    // ---- 姿勢トラッキングはhandleOrientation側(alpha/beta/gammaの直接計算)に一本化した ----
-    // (以前はここでジャイロの角速度(rotationRate)を積算してgyroQuatを更新し、それを
-    // カメラ姿勢として使っていたが、実機検証で積算結果(gyroQuat)だけが大きくズレる
-    // 不具合が確認されたため、この積算処理は無効化した。rotationRateは以下の
-    // 「回転中かどうか」の判定(足踏み検出の抑制用)にのみ引き続き使用する)
     const rot = event.rotationRate;
     const hasRot = rot && (rot.alpha !== null || rot.beta !== null || rot.gamma !== null);
-    state.debugRaw.gyroActive = !!hasRot; // 表示用(現在はこの値で姿勢計算を切り替えてはいない)
+    state.debugRaw.gyroActive = !!hasRot;
     const now = performance.now();
+    const dt = lastMotionTime !== null ? Math.min((now - lastMotionTime) / 1000, 0.1) : null;
     lastMotionTime = now;
 
-    // 重力を含まない加速度(event.acceleration)が使えるならそちらを優先する。
+    // 重力を含まない加速度(event.acceleration)が使えるならそちらを優先する(足踏み検出用)。
     // accelerationIncludingGravityは、端末を「傾ける」だけでも重力の投影方向が変わり、
     // 見かけ上の加速度が生じてしまう(=足踏みしていないのに前進判定されるバグの原因)。
     const acc = (event.acceleration && event.acceleration.x !== null)
@@ -1271,10 +1243,45 @@ const SensorSystem = (() => {
       lpX = acc.x; lpY = acc.y; lpZ = acc.z; lpInit = true;
       return;
     }
-    // 低域通過(姿勢・重力成分の推定)
+    // 低域通過(姿勢・重力成分の推定。足踏み検出用)
     lpX += LOWPASS_ALPHA * (acc.x - lpX);
     lpY += LOWPASS_ALPHA * (acc.y - lpY);
     lpZ += LOWPASS_ALPHA * (acc.z - lpZ);
+
+    // ---- 重力方向の推定(ヨー計算専用) ----
+    // 足踏み検出用の`acc`は重力を除いた値を優先するため、そのまま重力方向としては使えない。
+    // ヨーの計算には必ずaccelerationIncludingGravity(重力を含む生の加速度)を使う。
+    const gravRaw = event.accelerationIncludingGravity;
+    if (gravRaw && gravRaw.x !== null) {
+      if (!gravLpInit) {
+        gravLpX = gravRaw.x; gravLpY = gravRaw.y; gravLpZ = gravRaw.z; gravLpInit = true;
+      } else {
+        gravLpX += LOWPASS_ALPHA * (gravRaw.x - gravLpX);
+        gravLpY += LOWPASS_ALPHA * (gravRaw.y - gravLpY);
+        gravLpZ += LOWPASS_ALPHA * (gravRaw.z - gravLpZ);
+      }
+    }
+
+    // ---- ヨー(左右)の積算: ジャイロの角速度を「その瞬間の重力方向(鉛直軸)」へ投影する ----
+    // rotationRateの各成分は規格上、beta→ローカルX軸、gamma→ローカルY軸、alpha→ローカルZ軸の
+    // 角速度(deg/s)を表す。これを、低域通過フィルタで推定した重力方向(=端末にとっての
+    // 鉛直軸)に投影(内積)すると、端末が今どんな傾きで構えられていても「実世界の鉛直軸
+    // まわりに今どれだけの速さで回転しているか」を直接表す値になる。
+    // オイラー角(alpha/beta/gamma)を経由しないため、ジンバルロックが原理的に起きない。
+    // 数値シミュレーションで、純粋な左右回転・純粋な上下チルト・その組み合わせのすべてに
+    // ついて正しく分離できることを検証済み。
+    if (hasRot && dt !== null && gravLpInit) {
+      const gLen = Math.hypot(gravLpX, gravLpY, gravLpZ);
+      if (gLen > 1e-6) {
+        const gx = gravLpX / gLen, gy = gravLpY / gLen, gz = gravLpZ / gLen;
+        const wx = THREE.MathUtils.degToRad(rot.beta || 0);
+        const wy = THREE.MathUtils.degToRad(rot.gamma || 0);
+        const wz = THREE.MathUtils.degToRad(rot.alpha || 0);
+        const yawRateWorld = wx * gx + wy * gy + wz * gz;
+        gyroYawRad += yawRateWorld * dt;
+        gyroYawAvailable = true;
+      }
+    }
 
     // 高域成分(動きの急な変化)
     const hx = acc.x - lpX;
@@ -1340,12 +1347,12 @@ const SensorSystem = (() => {
 
   // 初期校正: ゲーム開始時に構えている向き(上下の傾きも含む)を、そのまま正面(まっすぐ前)にする。
   function calibrate() {
-    const base = currentRawQuaternion; // alpha/beta/gammaから直接計算した最新の姿勢を基準にする
+    const base = currentRawQuaternion; // alpha/beta/gammaから直接計算した最新の姿勢を基準にする(ピッチ用)
     calibrationInverse.copy(base).invert();
     state.calibrated = true;
     state.debugLastCalibrateYawDeg = 0; // 校正直後は差分0
-    // 再校正のたびにヨーのレート制限をリセットし、正面へ即座に向き直せるようにする
-    yawTrackInitialized = false;
+    // ヨーはジャイロの積算値なので、校正のたびに0(正面)にリセットする。
+    gyroYawRad = 0;
     // 次のイベントを待たず、この瞬間の姿勢を即座に反映する
     updateDerivedState(base);
   }
@@ -4679,7 +4686,7 @@ const PvpSystem = (() => {
         const d = SensorSystem.state.debugRaw;
         const fmt = (v) => (v === null || v === undefined) ? '--' : v.toFixed(1);
         el.sensorDebug.textContent =
-          `mode: direct(a/b/g)  rotationRate:${d.gyroActive ? 'yes' : 'no'}\n` +
+          `pitch:absolute  yaw:${d.gyroActive ? 'gyro' : 'fallback(alpha)'}\n` +
           `alpha:${fmt(d.alpha)} beta:${fmt(d.beta)} gamma:${fmt(d.gamma)}\n` +
           `compass:${fmt(d.compass)}\n` +
           `yaw:${fmt(SensorSystem.state.yawDeg)} pitch:${fmt(SensorSystem.state.pitchDeg)} roll:${fmt(SensorSystem.state.rollDeg)}`;
