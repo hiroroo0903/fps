@@ -37,6 +37,7 @@
   -ms-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
+  touch-action: manipulation; /* ダブルタップ拡大を止める(スクロールは残す) */
 }
 
 /* 対戦コードの入出力欄だけは、コピー・貼り付けのために選択できるようにする */
@@ -58,6 +59,13 @@ html, body {
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
+}
+
+/* iOSは user-scalable=no を無視するため、touch-action で明示的に止める。
+   ここを指定しないと、連打で撃つたびに「ダブルタップ拡大」が働いて画面が拡大してしまう。
+   (touch-action は継承されないので、要素ごとに指定する必要がある) */
+#canvas-container, #canvas-container canvas, #hud {
+  touch-action: none;
 }
 
 #canvas-container {
@@ -454,7 +462,7 @@ html, body {
 
 .fire-button {
   position: absolute; right: 1rem; bottom: 1rem;
-  width: 4.6rem; height: 4.6rem;
+  width: 4.2rem; height: 4.2rem;
   border-radius: 50%;
   background: rgba(255, 59, 48, 0.25);
   border: 2px solid var(--danger);
@@ -465,15 +473,15 @@ html, body {
 .fire-button:active { background: rgba(255, 59, 48, 0.5); }
 
 .strafe-button {
-  --strafe-size: 4.4rem;    /* ボタンの直径 */
-  --strafe-offset: 1.7rem;  /* 中央からの間隔 */
+  --strafe-size: 5.0rem;    /* ボタンの直径 */
+  --strafe-offset: 1.5rem;  /* 中央からの間隔 */
   position: absolute; bottom: 1.1rem;
   width: var(--strafe-size); height: var(--strafe-size);
   border-radius: 50%;
   background: rgba(219, 228, 214, 0.14);
   border: 2px solid var(--text-dim);
   color: var(--text-main);
-  font-size: 1.5rem;
+  font-size: 1.7rem;
   display: flex; align-items: center; justify-content: center;
   pointer-events: auto;
   touch-action: none;
@@ -482,13 +490,13 @@ html, body {
 }
 /* 見た目より少し広い範囲で反応させて、押しやすくする */
 .strafe-button::after {
-  content: ''; position: absolute; inset: -0.25rem; border-radius: 50%;
+  content: ''; position: absolute; inset: -0.3rem; border-radius: 50%;
 }
 .strafe-button:active { background: rgba(219, 228, 214, 0.32); border-color: var(--accent); color: var(--accent); }
 .strafe-left { left: 50%; transform: translateX(calc(-1 * (var(--strafe-offset) + var(--strafe-size)))); }
 
 .btn-quit-mission {
-  position: absolute; left: 1rem; bottom: 1.2rem;
+  position: absolute; left: 1rem; bottom: 7.2rem;
   background: rgba(10, 14, 10, 0.6);
   border: 1px solid var(--panel-line);
   color: var(--text-dim);
@@ -501,15 +509,15 @@ html, body {
 .btn-quit-mission:active { color: var(--danger); border-color: var(--danger); }
 .btn-quit-mission.hidden { display: none; }
 .strafe-reload {
-  left: 50%; --strafe-size: 2.6rem; font-size: 1.1rem;
+  left: 50%; --strafe-size: 2.2rem; font-size: 1.0rem;
   transform: translateX(calc(var(--strafe-size) / -2));
 }
 .strafe-right { left: 50%; transform: translateX(var(--strafe-offset)); }
 
 /* 画面幅が狭い端末では少しだけ小さくして、FIREボタンと重ならないようにする */
 @media (max-width: 380px) {
-  .strafe-button { --strafe-size: 3.9rem; --strafe-offset: 1.5rem; }
-  .strafe-reload { --strafe-size: 2.4rem; }
+  .strafe-button { --strafe-size: 4.4rem; --strafe-offset: 1.35rem; }
+  .strafe-reload { --strafe-size: 2.0rem; }
 }
 
 /* スコープ(覗き撃ち) */
@@ -955,7 +963,7 @@ const STAGE_DEFS = {
   outpost: {
     name: 'OUTPOST(前哨基地)',
     desc: '2Fデッキ・倉庫・長い通路・ダクトのある基地。ソロ/チーム戦の標準ステージ',
-    gridSize: 26,
+    gridSize: 18,
     theme: {
       floor: { base: '#e9e4d2', alt: '#dcd6bf', line: '#b9b39a', grime: 'rgba(0,0,0,0.04)' },
       wall: { base: '#b5551f', panel: 'rgba(0,0,0,0.18)', trim: 'rgba(0,0,0,0.22)' },
@@ -965,142 +973,109 @@ const STAGE_DEFS = {
       parapetColor: 0x8f8879,
     },
     rooms: [
-      { id: 'A', x: 2,  y: 2,  w: 5,  h: 4, name: 'スタートルーム' },
-      { id: 'B', x: 9,  y: 2,  w: 6,  h: 4, name: 'ビル1階' },
-      { id: 'C', x: 17, y: 2,  w: 7,  h: 4, name: '東の部屋' },
-      { id: 'D', x: 2,  y: 8,  w: 4,  h: 5, name: '西の部屋' },
-      { id: 'E', x: 20, y: 8,  w: 3,  h: 9, name: '東の縦通路' },
-      { id: 'F', x: 3,  y: 15, w: 16, h: 2, name: '長い直線通路' },
-      { id: 'G', x: 8,  y: 19, w: 11, h: 6, name: '庭' },
-      { id: 'H', x: 2,  y: 19, w: 5,  h: 5, name: '南西の部屋' },
-      { id: 'I', x: 20, y: 18, w: 5,  h: 6, name: '東の庭' },
+      { id: 'A', x: 2,  y: 2,  w: 4, h: 3,  name: 'スタート室' },
+      { id: 'B', x: 8,  y: 2,  w: 5, h: 3,  name: 'ビル1階' },
+      { id: 'E', x: 14, y: 2,  w: 3, h: 5,  name: '東の部屋' },
+      { id: 'D', x: 2,  y: 6,  w: 3, h: 4,  name: '西の部屋' },
+      { id: 'F', x: 2,  y: 11, w: 15, h: 2, name: '長い直線通路' },
+      { id: 'H', x: 2,  y: 14, w: 5, h: 3,  name: '南西の部屋' },
+      { id: 'G', x: 9,  y: 14, w: 7, h: 3,  name: '倉庫(見張り台)' },
     ],
     corridors: [
-      { x: 7,  y: 3,  w: 2, h: 2 }, // A - B
-      { x: 3,  y: 6,  w: 2, h: 2 }, // A - D
-      { x: 15, y: 3,  w: 2, h: 2 }, // B - C
-      { x: 21, y: 6,  w: 2, h: 2 }, // C - E
-      { x: 18, y: 9,  w: 2, h: 2 }, // duct2の出口 - E
-      { x: 3,  y: 13, w: 2, h: 2 }, // D - F
-      { x: 19, y: 15, w: 1, h: 2 }, // F - E
-      { x: 12, y: 17, w: 2, h: 2 }, // F - G(庭)
-      { x: 4,  y: 17, w: 2, h: 2 }, // F - H
-      { x: 7,  y: 21, w: 1, h: 2 }, // H - G
-      { x: 19, y: 20, w: 1, h: 3 }, // G - I(倉庫の東側の搬入口)
-      { x: 21, y: 17, w: 2, h: 1 }, // E - I
+      { x: 6,  y: 3,  w: 2, h: 1 }, // A - B
+      { x: 3,  y: 5,  w: 1, h: 1 }, // A - D
+      { x: 13, y: 3,  w: 1, h: 1 }, // B - E
+      { x: 16, y: 7,  w: 1, h: 4 }, // E - F(東の縦通路)
+      { x: 3,  y: 10, w: 1, h: 1 }, // D - F
+      { x: 3,  y: 13, w: 1, h: 1 }, // F - H
+      { x: 9,  y: 13, w: 1, h: 1 }, // F - G(倉庫の入口)
+      { x: 7,  y: 15, w: 2, h: 1 }, // H - G
     ],
     ducts: [
-      { x: 14, y: 6, w: 1, h: 9 },  // duct1: ビル1階B → 長い直線通路(2Fデッキから飛び降りても入れる)
-      { x: 18, y: 6, w: 1, h: 3 },  // duct2: C → 階段の下(東の縦通路を経由せずに降りられる)
-      { x: 24, y: 4, w: 1, h: 14 }, // duct3: C → 東の庭(マップ東端を縦断)
-      { x: 23, y: 17, w: 1, h: 1 }, // duct3の出口(東の庭の高台に直接は登れないので west へ回り込む)
+      { x: 6, y: 4, w: 1, h: 7 },  // duct: スタート室の東 → 長い直線通路
     ],
     elevated: [
-      { x: 9,  y: 7,  w: 5, h: 6 }, // 2Fデッキ(ビルの屋上)
-      { x: 10, y: 13, w: 3, h: 2 }, // ベランダ(長い直線通路を見下ろす張り出し)
-      { x: 6,  y: 10, w: 3, h: 2 }, // 2Fへの階段(西の部屋Dから上がる)
-      { x: 15, y: 20, w: 3, h: 3 }, // 見張り台(庭の中央)
-      { x: 14, y: 21, w: 1, h: 1 }, // 見張り台への西のはしご段
-      { x: 18, y: 21, w: 1, h: 1 }, // 見張り台の東の降り口(反対側)
-      { x: 9,  y: 20, w: 3, h: 2 }, // 庭の低い台
-      { x: 12, y: 20, w: 1, h: 2 }, // 低い台へのスロープ
-      { x: 22, y: 18, w: 3, h: 2 }, // 東の庭の高台
-      { x: 22, y: 20, w: 3, h: 1 }, // 高台へのスロープ
+      { x: 8,  y: 6,  w: 5, h: 4 }, // 2Fデッキ
+      { x: 9,  y: 10, w: 3, h: 1 }, // ベランダ
+      { x: 13, y: 7,  w: 3, h: 2 }, // 2Fへの階段
+      { x: 12, y: 14, w: 2, h: 2 }, // 見張り台
+      { x: 11, y: 14, w: 1, h: 2 }, // 見張り台への西のはしご
+      { x: 14, y: 14, w: 1, h: 2 }, // 見張り台の東の降り口
     ],
     heightZones: [
-      { id: 'deck',    type: 'flat', gx0: 9,  gy0: 7,  gx1: 13, gy1: 12, height: DECK_HEIGHT,
+      { id: 'deck',    type: 'flat', gx0: 8, gy0: 6, gx1: 12, gy1: 9, height: DECK_HEIGHT,
         support: 'solid', railHeight: 1.05 },
-      { id: 'balcony', type: 'flat', gx0: 10, gy0: 13, gx1: 12, gy1: 14, height: DECK_HEIGHT,
+      { id: 'balcony', type: 'flat', gx0: 9, gy0: 10, gx1: 11, gy1: 10, height: DECK_HEIGHT,
         support: 'solid', railHeight: 1.05, openSides: ['south', 'east', 'west'],
-        // 神殿風の列柱。手すりの代わりに柱が並び、その間から下を狙える
-        colonnade: { columnHeight: 2.9, spacing: 5.0, pediment: true } },
-      { id: 'stairs',  type: 'ramp', axis: 'x', gx0: 6,  gy0: 10, gx1: 8,  gy1: 11,
-        h0: 0, h1: DECK_HEIGHT, style: 'stairs' },
-      { id: 'tower',   type: 'flat', gx0: 15, gy0: 20, gx1: 17, gy1: 22, height: TOWER_HEIGHT,
+        colonnade: { columnHeight: 2.9, spacing: 4.5, pediment: true } },
+      { id: 'stairs',  type: 'ramp', axis: 'x', gx0: 13, gy0: 7, gx1: 15, gy1: 8,
+        h0: DECK_HEIGHT, h1: 0, style: 'stairs' },
+      { id: 'tower',   type: 'flat', gx0: 12, gy0: 14, gx1: 13, gy1: 15, height: TOWER_HEIGHT,
         support: 'container', railHeight: 0.9 },
-      { id: 'towerW',  type: 'ramp', axis: 'x', gx0: 14, gy0: 21, gx1: 14, gy1: 21,
+      { id: 'towerW',  type: 'ramp', axis: 'x', gx0: 11, gy0: 14, gx1: 11, gy1: 15,
         h0: 0, h1: TOWER_HEIGHT, style: 'ladder' },
-      { id: 'towerE',  type: 'ramp', axis: 'x', gx0: 18, gy0: 21, gx1: 18, gy1: 21,
+      { id: 'towerE',  type: 'ramp', axis: 'x', gx0: 14, gy0: 14, gx1: 14, gy1: 15,
         h0: TOWER_HEIGHT, h1: 0, style: 'ladder' },
-      { id: 'pad',     type: 'flat', gx0: 9,  gy0: 20, gx1: 11, gy1: 21, height: PAD_HEIGHT,
-        support: 'container', railHeight: 0.55 },
-      { id: 'padramp', type: 'ramp', axis: 'x', gx0: 12, gy0: 20, gx1: 12, gy1: 21,
-        h0: PAD_HEIGHT, h1: 0, style: 'ladder' },
-      { id: 'ledge',   type: 'flat', gx0: 22, gy0: 18, gx1: 24, gy1: 19, height: LEDGE_HEIGHT,
-        support: 'container', railHeight: 0.7, openSides: ['west'] },
-      { id: 'ledgeramp', type: 'ramp', axis: 'y', gx0: 22, gy0: 20, gx1: 24, gy1: 20,
-        h0: LEDGE_HEIGHT, h1: 0, style: 'ladder' },
     ],
     wallBlocks: [
-      { gx: 20, gy: 2 }, { gx: 20, gy: 3 },  // 東の部屋CをL字にする
-      { gx: 12, gy: 2 },                      // ビル1階Bに柱状の仕切り
-      { gx: 4,  gy: 21 },                     // 南西の部屋Hに曲がり角
-      { gx: 9,  gy: 22 }, { gx: 9,  gy: 23 }, // 庭の西側の仕切り
-      { gx: 14, gy: 24 },                     // 庭の南の仕切り
-      { gx: 13, gy: 19 }, { gx: 13, gy: 23 },                     // 倉庫の西壁(y20-22が搬入口)
-      { gx: 15, gy: 24 }, { gx: 16, gy: 24 }, { gx: 17, gy: 24 }, { gx: 18, gy: 24 }, // 倉庫の南壁
-      { gx: 3,  gy: 10 },                     // 西の部屋D
+      { gx: 10, gy: 2 },                    // ビル1階をL字に
+      { gx: 15, gy: 4 },                    // 東の部屋に曲がり角
+      { gx: 4,  gy: 8 },                    // 西の部屋に柱型
+      { gx: 5,  gy: 14 },                   // 南西の部屋に曲がり角
     ],
     obstacles: [
-      { gx: 5,  gy: 4 },  { gx: 10, gy: 4 }, { gx: 14, gy: 2 },
-      { gx: 18, gy: 4 },  { gx: 22, gy: 3 }, { gx: 23, gy: 5 },
-      { gx: 5,  gy: 9 },  { gx: 2,  gy: 12 },
-      { gx: 21, gy: 10 }, { gx: 20, gy: 13 }, { gx: 22, gy: 16 },
-      // 長い直線通路(交互に置いて逃げ場を作る)
-      { gx: 6,  gy: 15 }, { gx: 9,  gy: 16 }, { gx: 12, gy: 16 }, { gx: 17, gy: 16 },
-      { gx: 18, gy: 15 },
-      // 南西の部屋
-      { gx: 2,  gy: 19 }, { gx: 6,  gy: 23 },
-      // 庭
-      { gx: 11, gy: 22 }, { gx: 12, gy: 19 }, { gx: 15, gy: 19 }, { gx: 15, gy: 23 },
-      { gx: 17, gy: 19 },
-      // 東の庭
-      { gx: 20, gy: 23 }, { gx: 24, gy: 23 },
+      { gx: 4,  gy: 3,  kind: 'stone' },    { gx: 9,  gy: 4, kind: 'stone' },
+      { gx: 12, gy: 2,  kind: 'stone' },    { gx: 16, gy: 3, kind: 'crate' },
+      { gx: 14, gy: 6,  kind: 'barrels' },
+      { gx: 2,  gy: 7,  kind: 'concrete' }, { gx: 4,  gy: 9, kind: 'sandbags' },
+      { gx: 5,  gy: 11, kind: 'concrete' }, { gx: 8,  gy: 12, kind: 'sandbags' },
+      { gx: 12, gy: 11, kind: 'barrels' },  { gx: 15, gy: 12, kind: 'concrete' },
+      { gx: 2,  gy: 16, kind: 'container' },{ gx: 6,  gy: 16, kind: 'barrels' },
+      { gx: 10, gy: 16, kind: 'crate' },     { gx: 15, gy: 14, kind: 'container' },
+      { gx: 16, gy: 9,  kind: 'barrels' },   { gx: 10, gy: 15, kind: 'sandbags' },
     ],
     vehicles: [
-      { kind: 'truck', cells: [{ gx: 10, gy: 24 }, { gx: 11, gy: 24 }], color: 0x5a6058 },
-      { kind: 'car',   cells: [{ gx: 9,  gy: 19 }, { gx: 10, gy: 19 }], color: 0x7a2828 },
-      { kind: 'car',   cells: [{ gx: 20, gy: 22 }, { gx: 21, gy: 22 }], color: 0x2c4a6a },
+      { kind: 'car', cells: [{ gx: 3, gy: 15 }, { gx: 4, gy: 15 }], color: 0x7a2828 },
+    ],
+    fences: [
+      { gx0: 7, gy0: 11, gx1: 7, gy1: 13 },
+      { gx0: 13, gy0: 10, gx1: 16, gy1: 10 },
     ],
     buildings: [
-      {
-        id: 'warehouse', name: '倉庫(見張り台のある建物)',
-        gx0: 13, gy0: 18, gx1: 19, gy1: 24,       // 外周(壁のライン)
-        inner: { gx0: 14, gy0: 19, gx1: 18, gy1: 23 }, // 屋内の床
+      { id: 'shed', name: '見張り台のある倉庫',
+        gx0: 8, gy0: 13, gx1: 16, gy1: 17,
+        inner: { gx0: 9, gy0: 14, gx1: 15, gy1: 16 },
         wallTop: 4.9, roofThickness: 0.4,
-        color: 0x8b8676, roofColor: 0x5d5850, trussColor: 0x4a4640,
-      },
+        color: 0x8b8676, roofColor: 0x5d5850, trussColor: 0x4a4640 },
     ],
-    fences: [],
     playerStart: { gx: 3, gy: 3 },
-    pvpHost: { gx: 3, gy: 3 },
-    pvpGuest: { gx: 22, gy: 23 },
+    pvpHost:     { gx: 3, gy: 3 },
+    pvpGuest:    { gx: 15, gy: 16 },
     enemySpawns: [
       { type: 'grunt',      gx: 11, gy: 3,  room: 'B' },
-      { type: 'rusher',     gx: 3,  gy: 11, room: 'D' },
-      { type: 'bruiser',    gx: 11, gy: 16, room: 'F' },
-      { type: 'sniper',     gx: 11, gy: 14, room: 'ベランダ' },
-      { type: 'gunner',     gx: 22, gy: 4,  room: 'C' },
-      { type: 'heavy',      gx: 21, gy: 14, room: 'E' },
-      { type: 'scout',      gx: 11, gy: 20, room: '庭の低い台' },
-      { type: 'guard',      gx: 4,  gy: 22, room: 'H' },
-      { type: 'skirmisher', gx: 16, gy: 21, room: '見張り台' },
-      { type: 'juggernaut', gx: 16, gy: 23, room: '倉庫内' },
+      { type: 'rusher',     gx: 3,  gy: 8,  room: 'D' },
+      { type: 'bruiser',    gx: 9,  gy: 11, room: 'F' },
+      { type: 'sniper',     gx: 10, gy: 10, room: 'ベランダ' },
+      { type: 'gunner',     gx: 15, gy: 3,  room: 'E' },
+      { type: 'heavy',      gx: 16, gy: 10, room: '東の縦通路' },
+      { type: 'scout',      gx: 10, gy: 8,  room: '2Fデッキ' },
+      { type: 'guard',      gx: 2,  gy: 15, room: 'H' },
+      { type: 'skirmisher', gx: 13, gy: 15, room: '見張り台' },
+      { type: 'juggernaut', gx: 11, gy: 16, room: '倉庫内' },
     ],
     teamEnemySpawns: [
-      { type: 'grunt',   gx: 22, gy: 4,  room: 'C' },
-      { type: 'bruiser', gx: 16, gy: 15, room: 'F' },
-      { type: 'sniper',  gx: 11, gy: 9,  room: '2Fデッキ' },
-      { type: 'gunner',  gx: 21, gy: 12, room: 'E' },
-      { type: 'scout',   gx: 23, gy: 19, room: '東の庭の高台' },
+      { type: 'grunt',   gx: 15, gy: 3,  room: 'E' },
+      { type: 'bruiser', gx: 9,  gy: 11, room: 'F' },
+      { type: 'sniper',  gx: 10, gy: 8,  room: '2Fデッキ' },
+      { type: 'gunner',  gx: 16, gy: 10, room: '東の縦通路' },
+      { type: 'scout',   gx: 15, gy: 16, room: '倉庫' },
     ],
     teamAllySpawns: [
       { type: 'assault',  gx: 2, gy: 2 },
       { type: 'scout',    gx: 4, gy: 2 },
       { type: 'heavy',    gx: 2, gy: 4 },
-      { type: 'marksman', gx: 6, gy: 5 },
-    ],
-  },
+      { type: 'marksman', gx: 5, gy: 3 },
+    ],  },
 
   // ============================================================
   // ステージ3「HOTEL 3F」: ホテルの3階フロア。対戦(1対1)向けの屋内ステージ。
@@ -1111,7 +1086,7 @@ const STAGE_DEFS = {
   hotel: {
     name: 'HOTEL 3F(ホテル3階)',
     desc: '客室・ロビー・メザニンのある屋内フロア。1対1の撃ち合い向き',
-    gridSize: 26,
+    gridSize: 18,
     theme: {
       indoor: true,
       wallHeight: 4.8,          // 天井の高さ。メザニンに立っても頭がつかえない高さにする
@@ -1126,131 +1101,112 @@ const STAGE_DEFS = {
                sun: 0xffe2b8, sunIntensity: 0.45, background: 0x1b1519 },
     },
     rooms: [
-      { id: 'R1', x: 3,  y: 2,  w: 4,  h: 4,  name: '客室301' },
-      { id: 'R2', x: 8,  y: 2,  w: 4,  h: 4,  name: '客室302' },
-      { id: 'R3', x: 13, y: 2,  w: 3,  h: 4,  name: '客室303' },
-      { id: 'C1', x: 2,  y: 7,  w: 14, h: 2,  name: '北の廊下' },
-      { id: 'R4', x: 2,  y: 10, w: 5,  h: 4,  name: '客室304' },
-      { id: 'R5', x: 8,  y: 10, w: 4,  h: 4,  name: '客室305' },
-      { id: 'L',  x: 16, y: 2,  w: 8,  h: 10, name: 'ロビー(受付)' },
-      { id: 'E',  x: 16, y: 12, w: 4,  h: 5,  name: 'エレベーターホール' },
-      { id: 'C2', x: 2,  y: 15, w: 14, h: 2,  name: '南の廊下' },
-      { id: 'R6', x: 2,  y: 18, w: 5,  h: 5,  name: '客室306' },
-      { id: 'R7', x: 9,  y: 18, w: 5,  h: 5,  name: '客室307' },
-      { id: 'B',  x: 20, y: 13, w: 4,  h: 10, name: '宴会場' },
-      { id: 'C3', x: 14, y: 21, w: 6,  h: 2,  name: 'サービス通路' },
-      { id: 'ST', x: 15, y: 18, w: 4,  h: 3,  name: '倉庫(リネン庫)' },
+      { id: 'R1', x: 2,  y: 2,  w: 3, h: 3,  name: '客室301' },
+      { id: 'R2', x: 6,  y: 2,  w: 3, h: 3,  name: '客室302' },
+      { id: 'R3', x: 10, y: 2,  w: 3, h: 3,  name: '客室303' },
+      { id: 'L',  x: 14, y: 2,  w: 3, h: 7,  name: 'ロビー(受付)' },
+      { id: 'C1', x: 2,  y: 6,  w: 11, h: 2, name: '廊下' },
+      { id: 'R4', x: 2,  y: 9,  w: 3, h: 3,  name: '客室304' },
+      { id: 'R5', x: 6,  y: 9,  w: 3, h: 3,  name: '客室305' },
+      { id: 'E',  x: 10, y: 9,  w: 3, h: 3,  name: 'エレベーターホール' },
+      { id: 'C2', x: 2,  y: 13, w: 11, h: 2, name: 'サービス通路' },
+      { id: 'ST', x: 2,  y: 16, w: 4, h: 1,  name: '倉庫(リネン庫)' },
+      { id: 'B',  x: 14, y: 11, w: 3, h: 6,  name: '宴会場' },
+      { id: 'C3', x: 7,  y: 16, w: 7, h: 1,  name: '裏の通路' },
     ],
-    // 客室のドア(1マスの開口)
     corridors: [
-      { x: 4,  y: 6,  w: 1, h: 1 },
-      { x: 9,  y: 6,  w: 1, h: 1 },
-      { x: 14, y: 6,  w: 1, h: 1 },
-      { x: 4,  y: 9,  w: 1, h: 1 },
-      { x: 9,  y: 9,  w: 1, h: 1 },
-      { x: 4,  y: 14, w: 1, h: 1 },
-      { x: 10, y: 14, w: 1, h: 1 },
-      { x: 4,  y: 17, w: 1, h: 1 },
-      { x: 10, y: 17, w: 1, h: 1 },
+      { x: 3,  y: 5,  w: 1, h: 1 }, // C1 - R1
+      { x: 7,  y: 5,  w: 1, h: 1 }, // C1 - R2
+      { x: 11, y: 5,  w: 1, h: 1 }, // C1 - R3
+      { x: 3,  y: 8,  w: 1, h: 1 }, // C1 - R4
+      { x: 7,  y: 8,  w: 1, h: 1 }, // C1 - R5
+      { x: 11, y: 8,  w: 1, h: 1 }, // C1 - E
+      { x: 13, y: 6,  w: 1, h: 1 }, // C1 - L
+      { x: 3,  y: 12, w: 1, h: 1 }, // R4 - C2
+      { x: 7,  y: 12, w: 1, h: 1 }, // R5 - C2
+      { x: 11, y: 12, w: 1, h: 1 }, // E  - C2
+      { x: 13, y: 13, w: 1, h: 1 }, // C2 - B
+      { x: 3,  y: 15, w: 1, h: 1 }, // C2 - ST
+      { x: 9,  y: 15, w: 1, h: 1 }, // C2 - C3
+      { x: 14, y: 16, w: 1, h: 1 }, // C3 - B
     ],
     ducts: [],
     elevated: [
-      { x: 20, y: 2,  w: 4, h: 3 }, // 吹き抜けを見下ろすメザニン
-      { x: 17, y: 3,  w: 3, h: 2 }, // メザニンへの階段
-      { x: 16, y: 9,  w: 3, h: 2 }, // ロビーの一段高いラウンジ席
-      { x: 16, y: 11, w: 3, h: 1 }, // ラウンジへのスロープ
+      { x: 15, y: 2, w: 2, h: 2 }, // 吹き抜けを見下ろすメザニン
+      { x: 14, y: 4, w: 3, h: 1 }, // メザニンへの階段
     ],
     heightZones: [
-      { id: 'mezzanine', type: 'flat', gx0: 20, gy0: 2, gx1: 23, gy1: 4, height: 2.2,
-        support: 'facade', railHeight: 1.0, railStyle: 'baluster', openSides: ['south'] },
-      { id: 'mezzStair', type: 'ramp', axis: 'x', gx0: 17, gy0: 3, gx1: 19, gy1: 4,
-        h0: 0, h1: 2.2, style: 'stairs' },
-      { id: 'lounge',    type: 'flat', gx0: 16, gy0: 9, gx1: 18, gy1: 10, height: 0.7,
-        support: 'facade', railHeight: 0.45 },
-      { id: 'loungeRamp', type: 'ramp', axis: 'y', gx0: 16, gy0: 11, gx1: 18, gy1: 11,
-        h0: 0.7, h1: 0, style: 'openTread' },
+      { id: 'mezzanine', type: 'flat', gx0: 15, gy0: 2, gx1: 16, gy1: 3, height: 2.2,
+        support: 'facade', railHeight: 1.0, railStyle: 'baluster', openSides: ['west'] },
+      { id: 'mezzStair', type: 'ramp', axis: 'y', gx0: 14, gy0: 4, gx1: 16, gy1: 4,
+        h0: 2.2, h1: 0, style: 'stairs' },
     ],
-    // 間仕切り。開口部を絞って曲がり角を作る
     wallBlocks: [
-      { gx: 18, gy: 12 }, { gx: 19, gy: 12 }, // ロビーとエレベーターホールの間仕切り
-      { gx: 20, gy: 15 }, { gx: 20, gy: 16 }, // エレベーターホールと宴会場の間仕切り
-      { gx: 19, gy: 21 },                     // サービス通路の曲がり角
-      { gx: 11, gy: 7 },                      // 北の廊下の柱型
-      { gx: 7,  gy: 16 },                     // 南の廊下の柱型
-      { gx: 22, gy: 18 },                     // 宴会場の間仕切り
+      { gx: 12, gy: 7 },   // 廊下の柱型
+      { gx: 5,  gy: 13 },  // サービス通路の曲がり角
+      { gx: 16, gy: 14 },  // 宴会場の間仕切り
     ],
-    // 家具・調度品
     obstacles: [
-      // ロビー: 受付カウンターとソファ、観葉植物
-      { gx: 17, gy: 6, kind: 'counter' }, { gx: 18, gy: 6, kind: 'counter' },
-      { gx: 21, gy: 8, kind: 'sofa' },    { gx: 22, gy: 10, kind: 'sofa' },
-      { gx: 16, gy: 2, kind: 'plant' },   { gx: 19, gy: 11, kind: 'plant' },
-      { gx: 23, gy: 6, kind: 'plant' },
-      // 客室: ベッドとワードローブ
-      { gx: 3,  gy: 3, kind: 'bed' },     { gx: 6,  gy: 2, kind: 'wardrobe' },
-      { gx: 8,  gy: 3, kind: 'bed' },     { gx: 11, gy: 2, kind: 'wardrobe' },
-      { gx: 13, gy: 3, kind: 'bed' },
-      { gx: 3,  gy: 11, kind: 'bed' },    { gx: 6,  gy: 10, kind: 'wardrobe' },
-      { gx: 9,  gy: 11, kind: 'bed' },
-      { gx: 3,  gy: 19, kind: 'bed' },    { gx: 6,  gy: 18, kind: 'wardrobe' },
-      { gx: 10, gy: 19, kind: 'bed' },    { gx: 13, gy: 18, kind: 'wardrobe' },
-      // 客室のデスクと冷蔵庫(ミニバー)
-      { gx: 5,  gy: 5,  kind: 'desk' },   { gx: 10, gy: 5,  kind: 'desk' },
-      { gx: 5,  gy: 13, kind: 'desk' },   { gx: 5,  gy: 22, kind: 'desk' },
-      { gx: 12, gy: 22, kind: 'desk' },
-      { gx: 3,  gy: 2,  kind: 'fridge' }, { gx: 8,  gy: 2,  kind: 'fridge' },
-      { gx: 2,  gy: 10, kind: 'fridge' }, { gx: 2,  gy: 18, kind: 'fridge' },
-      { gx: 9,  gy: 18, kind: 'fridge' },
-      // 倉庫(リネン庫)のスチール棚
-      { gx: 15, gy: 18, kind: 'shelf' },  { gx: 17, gy: 18, kind: 'shelf' },
-      { gx: 15, gy: 19, kind: 'shelf' },
-      // 廊下: 観葉植物とラゲッジカート
-      { gx: 2,  gy: 8,  kind: 'plant' },  { gx: 15, gy: 8, kind: 'plant' },
-      { gx: 2,  gy: 15, kind: 'plant' },  { gx: 12, gy: 15, kind: 'luggage' },
-      { gx: 17, gy: 13, kind: 'luggage' },
-      // 宴会場: 丸テーブル
-      { gx: 21, gy: 14, kind: 'table' },  { gx: 22, gy: 16, kind: 'table' },
-      { gx: 21, gy: 19, kind: 'table' },  { gx: 22, gy: 21, kind: 'table' },
-      { gx: 15, gy: 22, kind: 'plant' },
+      // ロビー: 受付・ソファ・観葉植物
+      { gx: 16, gy: 6, kind: 'counter' }, { gx: 16, gy: 8, kind: 'sofa' },
+      { gx: 14, gy: 8, kind: 'plant' },   { gx: 16, gy: 5, kind: 'plant' },
+      // 客室: ベッド・クローゼット・デスク・冷蔵庫
+      { gx: 2,  gy: 2, kind: 'bed' },     { gx: 4,  gy: 2, kind: 'wardrobe' },
+      { gx: 2,  gy: 4, kind: 'desk' },
+      { gx: 6,  gy: 2, kind: 'bed' },     { gx: 8,  gy: 2, kind: 'fridge' },
+      { gx: 8,  gy: 4, kind: 'desk' },
+      { gx: 10, gy: 2, kind: 'bed' },     { gx: 12, gy: 2, kind: 'wardrobe' },
+      { gx: 2,  gy: 11, kind: 'bed' },    { gx: 4,  gy: 9,  kind: 'wardrobe' },
+      { gx: 6,  gy: 11, kind: 'bed' },    { gx: 8,  gy: 9,  kind: 'fridge' },
+      { gx: 8,  gy: 11, kind: 'desk' },
+      // 廊下と裏の通路
+      { gx: 5,  gy: 6,  kind: 'plant' },  { gx: 9,  gy: 7,  kind: 'luggage' },
+      { gx: 5,  gy: 14, kind: 'luggage' },{ gx: 11, gy: 16, kind: 'plant' },
+      // エレベーターホール
+      { gx: 10, gy: 10, kind: 'plant' },
+      // 倉庫
+      { gx: 2,  gy: 16, kind: 'shelf' },  { gx: 5,  gy: 16, kind: 'shelf' },
+      // 宴会場
+      { gx: 15, gy: 13, kind: 'table' },  { gx: 14, gy: 15, kind: 'table' },
+      { gx: 16, gy: 16, kind: 'table' },  { gx: 14, gy: 11, kind: 'plant' },
     ],
     vehicles: [],
     fences: [],
     buildings: [
-      // フロア全体を覆う天井。屋内であることを表現する
       { id: 'floor3', name: 'ホテル3階',
-        gx0: 1, gy0: 1, gx1: 24, gy1: 24,
-        inner: { gx0: 2, gy0: 2, gx1: 23, gy1: 23 },
+        gx0: 1, gy0: 1, gx1: 17, gy1: 17,
+        inner: { gx0: 2, gy0: 2, gx1: 16, gy1: 16 },
         wallTop: 4.8, roofThickness: 0.35, roofStyle: 'ceiling',
         ceilingLights: true,
         color: 0xd9cfba, roofColor: 0xe6dfd0, trussColor: 0x8a7a60 },
     ],
-    playerStart: { gx: 4,  gy: 20 },
-    pvpHost:     { gx: 4,  gy: 20 },
-    pvpGuest:    { gx: 22, gy: 7  }, // ロビーの床(メザニンは高所すぎるので開始地点にしない)
+    playerStart: { gx: 3, gy: 10 },
+    pvpHost:     { gx: 3, gy: 10 },
+    pvpGuest:    { gx: 15, gy: 7 },
     enemySpawns: [
-      { type: 'grunt',      gx: 21, gy: 3,  room: 'メザニン' },
-      { type: 'rusher',     gx: 5,  gy: 3,  room: '客室301' },
-      { type: 'bruiser',    gx: 18, gy: 9,  room: 'ラウンジ' },
-      { type: 'sniper',     gx: 22, gy: 3,  room: 'メザニン' },
-      { type: 'gunner',     gx: 21, gy: 17, room: '宴会場' },
-      { type: 'heavy',      gx: 17, gy: 15, room: 'エレベーターホール' },
-      { type: 'scout',      gx: 9,  gy: 8,  room: '北の廊下' },
-      { type: 'guard',      gx: 9,  gy: 16, room: '南の廊下' },
-      { type: 'skirmisher', gx: 11, gy: 20, room: '客室307' },
-      { type: 'juggernaut', gx: 20, gy: 6,  room: 'ロビー' },
+      { type: 'grunt',      gx: 16, gy: 2,  room: 'メザニン' },
+      { type: 'rusher',     gx: 3,  gy: 3,  room: '客室301' },
+      { type: 'bruiser',    gx: 15, gy: 6,  room: 'ロビー' },
+      { type: 'sniper',     gx: 15, gy: 3,  room: 'メザニン' },
+      { type: 'gunner',     gx: 15, gy: 15, room: '宴会場' },
+      { type: 'heavy',      gx: 11, gy: 10, room: 'エレベーターホール' },
+      { type: 'scout',      gx: 6,  gy: 6,  room: '廊下' },
+      { type: 'guard',      gx: 8,  gy: 14, room: 'サービス通路' },
+      { type: 'skirmisher', gx: 7,  gy: 10, room: '客室305' },
+      { type: 'juggernaut', gx: 10, gy: 16, room: '裏の通路' },
     ],
     teamEnemySpawns: [
-      { type: 'grunt',   gx: 21, gy: 3,  room: 'メザニン' },
-      { type: 'bruiser', gx: 20, gy: 6,  room: 'ロビー' },
-      { type: 'sniper',  gx: 18, gy: 9,  room: 'ラウンジ' },
-      { type: 'gunner',  gx: 21, gy: 17, room: '宴会場' },
-      { type: 'scout',   gx: 17, gy: 15, room: 'エレベーターホール' },
+      { type: 'grunt',   gx: 15, gy: 6,  room: 'ロビー' },
+      { type: 'bruiser', gx: 15, gy: 15, room: '宴会場' },
+      { type: 'sniper',  gx: 15, gy: 3,  room: 'メザニン' },
+      { type: 'gunner',  gx: 11, gy: 10, room: 'エレベーターホール' },
+      { type: 'scout',   gx: 10, gy: 16, room: '裏の通路' },
     ],
     teamAllySpawns: [
-      { type: 'assault',  gx: 3, gy: 20 },
-      { type: 'scout',    gx: 5, gy: 20 },
-      { type: 'heavy',    gx: 3, gy: 21 },
-      { type: 'marksman', gx: 5, gy: 21 },
+      { type: 'assault',  gx: 2, gy: 10 },
+      { type: 'scout',    gx: 4, gy: 10 },
+      { type: 'heavy',    gx: 2, gy: 9 },
+      { type: 'marksman', gx: 3, gy: 11 },
     ],
   },
 
@@ -1262,7 +1218,7 @@ const STAGE_DEFS = {
   rig: {
     name: 'RIG(掘削リグ)',
     desc: '1対1向けの小さな闘技場。中央のやぐらと屋上テラスの取り合い',
-    gridSize: 24,
+    gridSize: 17,
     theme: {
       floor: { base: '#ddd7c6', alt: '#cec7b3', line: '#a9a390', grime: 'rgba(70,60,45,0.05)' },
       wall: { base: '#e6e0cd', panel: '#d5cebb', trim: '#9c9683' },
@@ -1275,109 +1231,94 @@ const STAGE_DEFS = {
     },
     // ヤード(リグの甲板)。構造物は WALL_BLOCK と高所ゾーンで作る
     rooms: [
-      { id: 'Y', x: 2, y: 2, w: 20, h: 20, name: '甲板' },
+      { id: 'Y', x: 2, y: 2, w: 13, h: 13, name: '甲板' },
     ],
     corridors: [],
     ducts: [],
     elevated: [
-      { x: 10, y: 10, w: 4, h: 3 }, // 中央やぐらの床
-      { x: 12, y: 13, w: 1, h: 2 }, // やぐらへの階段(南)
-      { x: 4,  y: 3,  w: 5, h: 4 }, // 北西の屋上テラス
-      { x: 9,  y: 4,  w: 3, h: 2 }, // テラスへの外階段(東)
-      { x: 4,  y: 16, w: 3, h: 2 }, // 南西のコンテナ足場
-      { x: 7,  y: 16, w: 1, h: 2 }, // 足場へのスロープ
-      { x: 17, y: 17, w: 3, h: 2 }, // 南東の足場
-      { x: 17, y: 19, w: 3, h: 1 }, // 南東の足場へのスロープ
+      { x: 7,  y: 7,  w: 3, h: 2 }, // 中央やぐらの床
+      { x: 8,  y: 9,  w: 1, h: 2 }, // やぐらへの階段(南)
+      { x: 3,  y: 2,  w: 3, h: 3 }, // 北西の屋上テラス
+      { x: 6,  y: 3,  w: 2, h: 1 }, // テラスへの外階段(東)
+      { x: 3,  y: 11, w: 2, h: 2 }, // 南西のコンテナ足場
+      { x: 5,  y: 11, w: 1, h: 2 }, // 足場へのスロープ
+      { x: 12, y: 11, w: 2, h: 2 }, // 南東の足場
+      { x: 12, y: 13, w: 2, h: 1 }, // 南東の足場へのスロープ
     ],
     heightZones: [
-      { id: 'derrick', type: 'flat', gx0: 10, gy0: 10, gx1: 13, gy1: 12, height: 3.6,
+      { id: 'derrick', type: 'flat', gx0: 7, gy0: 7, gx1: 9, gy1: 8, height: 3.4,
         support: 'lattice', railHeight: 1.0, openSides: ['north'], derrick: true },
-      { id: 'derrickStair', type: 'ramp', axis: 'y', gx0: 12, gy0: 13, gx1: 12, gy1: 14,
-        h0: 3.6, h1: 0, style: 'stairs' },
-      { id: 'terrace', type: 'flat', gx0: 4, gy0: 3, gx1: 8, gy1: 6, height: 3.2,
+      { id: 'derrickStair', type: 'ramp', axis: 'y', gx0: 8, gy0: 9, gx1: 8, gy1: 10,
+        h0: 3.4, h1: 0, style: 'stairs' },
+      { id: 'terrace', type: 'flat', gx0: 3, gy0: 2, gx1: 5, gy1: 4, height: 3.0,
         support: 'facade', railHeight: 1.0, railStyle: 'baluster', openSides: ['south'] },
-      { id: 'terraceStair', type: 'ramp', axis: 'x', gx0: 9, gy0: 4, gx1: 11, gy1: 5,
-        h0: 3.2, h1: 0, style: 'openTread' },
-      { id: 'padSW', type: 'flat', gx0: 4, gy0: 16, gx1: 6, gy1: 17, height: 1.25,
+      { id: 'terraceStair', type: 'ramp', axis: 'x', gx0: 6, gy0: 3, gx1: 7, gy1: 3,
+        h0: 3.0, h1: 0, style: 'openTread' },
+      { id: 'padSW', type: 'flat', gx0: 3, gy0: 11, gx1: 4, gy1: 12, height: 1.25,
         support: 'container', railHeight: 0.5 },
-      { id: 'padSWramp', type: 'ramp', axis: 'x', gx0: 7, gy0: 16, gx1: 7, gy1: 17,
+      { id: 'padSWramp', type: 'ramp', axis: 'x', gx0: 5, gy0: 11, gx1: 5, gy1: 12,
         h0: 1.25, h1: 0, style: 'ladder' },
-      { id: 'padSE', type: 'flat', gx0: 17, gy0: 17, gx1: 19, gy1: 18, height: 1.25,
+      { id: 'padSE', type: 'flat', gx0: 12, gy0: 11, gx1: 13, gy1: 12, height: 1.25,
         support: 'container', railHeight: 0.5 },
-      { id: 'padSEramp', type: 'ramp', axis: 'y', gx0: 17, gy0: 19, gx1: 19, gy1: 19,
+      { id: 'padSEramp', type: 'ramp', axis: 'y', gx0: 12, gy0: 13, gx1: 13, gy1: 13,
         h0: 1.25, h1: 0, style: 'ladder' },
     ],
-    // 東の建屋(波板屋根・屋内)の壁。西側と南側に開口部を残す
     wallBlocks: [
-      { gx: 16, gy: 8 }, { gx: 16, gy: 9 }, { gx: 16, gy: 10 },
-      { gx: 16, gy: 12 }, { gx: 16, gy: 13 }, { gx: 16, gy: 14 },
-      { gx: 17, gy: 8 }, { gx: 18, gy: 8 }, { gx: 19, gy: 8 }, { gx: 20, gy: 8 }, { gx: 21, gy: 8 },
-      { gx: 17, gy: 14 }, { gx: 18, gy: 14 }, { gx: 20, gy: 14 }, { gx: 21, gy: 14 },
-      // 甲板を区切る短い壁(曲がり角づくり)
-      { gx: 8,  gy: 10 }, { gx: 8,  gy: 11 },
-      { gx: 5,  gy: 12 },
-      { gx: 12, gy: 6 },  { gx: 13, gy: 6 },
-      { gx: 9,  gy: 18 }, { gx: 10, gy: 18 },
+      { gx: 11, gy: 4 }, { gx: 11, gy: 5 }, { gx: 12, gy: 5 }, // 東の建屋の西壁
+      { gx: 11, gy: 8 }, { gx: 12, gy: 8 }, { gx: 13, gy: 8 }, // 東の建屋の南壁
+      { gx: 6,  gy: 6 }, { gx: 6,  gy: 7 },                    // 甲板の仕切り
+      { gx: 8,  gy: 13 },                                      // 南の仕切り
     ],
     buildings: [
       { id: 'shed', name: '波板屋根の建屋',
-        gx0: 16, gy0: 8, gx1: 22, gy1: 14,
-        inner: { gx0: 17, gy0: 9, gx1: 21, gy1: 13 },
+        gx0: 11, gy0: 3, gx1: 15, gy1: 8,
+        inner: { gx0: 12, gy0: 4, gx1: 14, gy1: 7 },
         wallTop: 4.4, roofThickness: 0.3, roofStyle: 'corrugated',
         color: 0xd9d3c0, roofColor: 0x8d949a, trussColor: 0x59524a },
     ],
     obstacles: [
-      { gx: 3,  gy: 9,  kind: 'tarp' },
-      { gx: 6,  gy: 9,  kind: 'barrels' },
-      { gx: 3,  gy: 14, kind: 'container' },
-      { gx: 9,  gy: 8,  kind: 'tarp' },
-      { gx: 14, gy: 4,  kind: 'container' },
-      { gx: 17, gy: 4,  kind: 'tarp' },
-      { gx: 19, gy: 3,  kind: 'barrels' },
-      { gx: 20, gy: 11, kind: 'crate' },
-      { gx: 12, gy: 17, kind: 'tarp' },
-      { gx: 14, gy: 20, kind: 'container' },
-      { gx: 8,  gy: 20, kind: 'barrels' },
-      { gx: 20, gy: 20, kind: 'tarp' },
-      { gx: 5,  gy: 19, kind: 'crate' },
-      { gx: 15, gy: 15, kind: 'concrete' },
-      { gx: 9,  gy: 14, kind: 'concrete' },
+      { gx: 2,  gy: 6,  kind: 'tarp' },     { gx: 4,  gy: 6,  kind: 'barrels' },
+      { gx: 2,  gy: 9,  kind: 'container' },{ gx: 5,  gy: 8,  kind: 'concrete' },
+      { gx: 7,  gy: 2,  kind: 'tarp' },     { gx: 9,  gy: 4,  kind: 'container' },
+      { gx: 13, gy: 2,  kind: 'barrels' },  { gx: 13, gy: 6,  kind: 'crate' },
+      { gx: 10, gy: 9,  kind: 'tarp' },     { gx: 6,  gy: 11, kind: 'container' },
+      { gx: 9,  gy: 13, kind: 'barrels' },  { gx: 14, gy: 10, kind: 'tarp' },
+      { gx: 3,  gy: 14, kind: 'crate' },    { gx: 10, gy: 12, kind: 'concrete' },
+      { gx: 7,  gy: 5,  kind: 'concrete' },
     ],
     vehicles: [],
-    // 金網フェンス(視線は通るが雰囲気づけ)。グリッド境界に沿った線分
     fences: [
-      { gx0: 2, gy0: 12, gx1: 5,  gy1: 12 },
-      { gx0: 14, gy0: 7, gx1: 16, gy1: 7 },
-      { gx0: 11, gy0: 20, gx1: 14, gy1: 20 },
-      { gx0: 21, gy0: 15, gx1: 21, gy1: 18 },
+      { gx0: 2, gy0: 10, gx1: 4,  gy1: 10 },
+      { gx0: 10, gy0: 2, gx1: 10, gy1: 4 },
+      { gx0: 6, gy0: 13, gx1: 8,  gy1: 13 },
     ],
-    playerStart: { gx: 3, gy: 20 },
-    pvpHost:     { gx: 3, gy: 20 },
-    pvpGuest:    { gx: 20, gy: 3 },
+    playerStart: { gx: 3, gy: 13 },
+    pvpHost:     { gx: 3, gy: 13 },
+    pvpGuest:    { gx: 14, gy: 13 },
     enemySpawns: [
-      { type: 'grunt',      gx: 12, gy: 11, room: 'やぐら' },
-      { type: 'rusher',     gx: 6,  gy: 4,  room: '屋上テラス' },
-      { type: 'bruiser',    gx: 19, gy: 11, room: '建屋' },
-      { type: 'sniper',     gx: 5,  gy: 17, room: '南西の足場' },
-      { type: 'gunner',     gx: 18, gy: 17, room: '南東の足場' },
-      { type: 'heavy',      gx: 12, gy: 20, room: '甲板南' },
-      { type: 'scout',      gx: 4,  gy: 11, room: '甲板西' },
-      { type: 'guard',      gx: 19, gy: 5,  room: '甲板北東' },
-      { type: 'skirmisher', gx: 11, gy: 4,  room: '甲板北' },
-      { type: 'juggernaut', gx: 16, gy: 20, room: '甲板南東' },
+      { type: 'grunt',      gx: 8,  gy: 7,  room: 'やぐら' },
+      { type: 'rusher',     gx: 4,  gy: 3,  room: '屋上テラス' },
+      { type: 'bruiser',    gx: 13, gy: 5,  room: '建屋' },
+      { type: 'sniper',     gx: 3,  gy: 12, room: '南西の足場' },
+      { type: 'gunner',     gx: 13, gy: 11, room: '南東の足場' },
+      { type: 'heavy',      gx: 8,  gy: 14, room: '甲板南' },
+      { type: 'scout',      gx: 3,  gy: 8,  room: '甲板西' },
+      { type: 'guard',      gx: 13, gy: 3,  room: '建屋' },
+      { type: 'skirmisher', gx: 8,  gy: 3,  room: '甲板北' },
+      { type: 'juggernaut', gx: 12, gy: 14, room: '甲板南東' },
     ],
     teamEnemySpawns: [
-      { type: 'grunt',   gx: 19, gy: 5,  room: '甲板北東' },
-      { type: 'bruiser', gx: 19, gy: 11, room: '建屋' },
-      { type: 'sniper',  gx: 12, gy: 11, room: 'やぐら' },
-      { type: 'gunner',  gx: 18, gy: 17, room: '南東の足場' },
-      { type: 'scout',   gx: 16, gy: 20, room: '甲板南東' },
+      { type: 'grunt',   gx: 13, gy: 3,  room: '建屋' },
+      { type: 'bruiser', gx: 13, gy: 5,  room: '建屋' },
+      { type: 'sniper',  gx: 8,  gy: 7,  room: 'やぐら' },
+      { type: 'gunner',  gx: 13, gy: 11, room: '南東の足場' },
+      { type: 'scout',   gx: 12, gy: 14, room: '甲板南東' },
     ],
     teamAllySpawns: [
-      { type: 'assault',  gx: 3, gy: 19 },
-      { type: 'scout',    gx: 4, gy: 20 },
-      { type: 'heavy',    gx: 3, gy: 21 },
-      { type: 'marksman', gx: 5, gy: 20 },
+      { type: 'assault',  gx: 2, gy: 13 },
+      { type: 'scout',    gx: 4, gy: 13 },
+      { type: 'heavy',    gx: 2, gy: 14 },
+      { type: 'marksman', gx: 4, gy: 14 },
     ],
   },
 };
@@ -6046,7 +5987,20 @@ const PvpSystem = (() => {
       btnEl.addEventListener('mouseup', release);
       btnEl.addEventListener('mouseleave', release);
     }
-    // 何らかの理由で離した判定が来なかった場合の保険
+    // 何らかの理由でボタン上の離した判定が来なかった場合の保険。
+    // ここが効かないと押しっぱなしのまま固まるので、window側でも必ず解除する
+    let activePointer = null;
+    btnEl.addEventListener('pointerdown', (e) => { activePointer = e.pointerId; });
+    const windowRelease = (e) => {
+      if (activePointer === null) return;
+      if (e && e.pointerId !== undefined && e.pointerId !== activePointer) return;
+      activePointer = null;
+      keyState[stateKey] = false;
+    };
+    window.addEventListener('pointerup', windowRelease);
+    window.addEventListener('pointercancel', windowRelease);
+    window.addEventListener('touchend', () => windowRelease(null));
+    window.addEventListener('touchcancel', () => windowRelease(null));
     window.addEventListener('blur', () => release(null));
     document.addEventListener('visibilitychange', () => { if (document.hidden) release(null); });
   }
@@ -6183,6 +6137,23 @@ const PvpSystem = (() => {
     el.gameoverStats.textContent = `難易度: ${diffLabel}   撃破数: ${EnemyManager.getTotalCount() - EnemyManager.getAliveCount()} / ${EnemyManager.getTotalCount()}   経過時間: ${elapsed}秒`;
     showScreen(el.gameover);
   }
+
+  // ---- ブラウザのズーム操作の抑止 ----
+  // iOSのSafariは viewport の user-scalable=no を無視するので、
+  // ピンチ(gestureイベント)と2本指タッチ、素早い2連続タップを個別に止める。
+  // 撃つ操作が「画面タップ」なので、止めないと連射のたびに画面が拡大してしまう。
+  ['gesturestart', 'gesturechange', 'gestureend'].forEach((type) => {
+    document.addEventListener(type, (e) => { e.preventDefault(); }, { passive: false });
+  });
+  // 注意: touchend や複数タッチを preventDefault してはいけない。
+  // iOSではそれに対応する pointerup / pointerdown が発火しなくなり、
+  // 押しっぱなし判定の移動ボタンが解除されずに固まってしまう
+  // (左右が両方ONになって打ち消し合い、横移動ができなくなる)。
+  // ダブルタップ拡大は touch-action: manipulation で止まるので、ここでは何もしない。
+  // 拡大した状態でページに戻ってきた場合に備え、ホイール+Ctrl(PCのピンチ)も止める
+  document.addEventListener('wheel', (e) => {
+    if (e.ctrlKey) e.preventDefault();
+  }, { passive: false });
 
   // ---- 文字選択・長押しメニューの抑止 ----
   // CSSだけだと、iOSでは長押しの押し始めに一瞬選択が走ってメニューが出ることがある。
