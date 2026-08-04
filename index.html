@@ -226,6 +226,41 @@ html, body {
 .crosshair-line.h { top: 50%; left: 0; width: 100%; height: 2px; transform: translateY(-1px); }
 .crosshair-line.v { left: 50%; top: 0; height: 100%; width: 2px; transform: translateX(-1px); }
 
+/* 被弾時: クロスヘアが一瞬上にずれてから元の位置に戻る */
+.crosshair.hit-shake { animation: crosshair-hit-shake 0.32s ease-out; }
+@keyframes crosshair-hit-shake {
+  0%   { transform: translate(-50%, -50%); }
+  25%  { transform: translate(-50%, calc(-50% - 16px)); }
+  100% { transform: translate(-50%, -50%); }
+}
+
+/* 命中エフェクト: 相手に弾が当たった瞬間に光るX字マーカー */
+.hit-marker {
+  position: absolute; top: 50%; left: 50%;
+  width: 30px; height: 30px;
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  pointer-events: none;
+}
+.hit-marker::before, .hit-marker::after {
+  content: ''; position: absolute; top: 50%; left: 50%;
+  width: 100%; height: 2.5px;
+  background: #fff2b0;
+  box-shadow: 0 0 6px rgba(255, 242, 176, 0.8);
+}
+.hit-marker::before { transform: translate(-50%, -50%) rotate(45deg); }
+.hit-marker::after { transform: translate(-50%, -50%) rotate(-45deg); }
+.hit-marker.headshot::before, .hit-marker.headshot::after {
+  background: var(--danger);
+  box-shadow: 0 0 8px rgba(255, 59, 48, 0.9);
+}
+.hit-marker.show { animation: hit-marker-pop 0.28s ease-out; }
+@keyframes hit-marker-pop {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.5); }
+  15%  { opacity: 1; transform: translate(-50%, -50%) scale(1.35); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.7); }
+}
+
 .hud-top-left, .hud-top-right {
   position: absolute; top: 0.8rem;
   background: var(--panel);
@@ -475,10 +510,12 @@ html, body {
 
 <!-- HUD(ゲームプレイ中) -->
 <div id="hud" class="hidden">
-  <div class="crosshair">
+  <div id="crosshair" class="crosshair">
     <div class="crosshair-line h"></div>
     <div class="crosshair-line v"></div>
   </div>
+
+  <div id="hit-marker" class="hit-marker"></div>
 
   <div class="hud-top-left">
     <div class="hp-label">HP</div>
@@ -551,12 +588,12 @@ html, body {
 // ============================================================
 // mapdata.js
 // 固定の手作りマップレイアウト(部屋+通路構成)をグリッドとして定義する。
-// グリッドは 26x26。0 = 壁, 1 = 床。
+// グリッドは 44x44。0 = 壁, 1 = 床。
 // 部屋・通路は「矩形(x,y,w,h)」のリストとして人手でデザインし、
 // それをもとにグリッドを構築する(ASCIIアートより誤り無く再現しやすいため)。
 // ============================================================
 
-const GRID_SIZE = 26;
+const GRID_SIZE = 44;
 const CELL_SIZE = 4; // Three.js空間上の1マスのサイズ(unit)
 
 // 部屋の矩形定義 [x, y, w, h] (グリッド座標、外周1マスは常に壁として残す)
@@ -573,6 +610,10 @@ const ROOMS = [
   { id: 'I', x: 20, y: 1, w: 4, h: 5, name: '東の増築室' },
   { id: 'J', x: 20, y: 9, w: 5, h: 6, name: '東南アリーナ' },
   { id: 'K', x: 8, y: 20, w: 9, h: 4, name: '南の大部屋' },
+  // --- 戦闘用の大規模拡張エリア ---
+  { id: 'N', x: 26, y: 8, w: 6, h: 5, name: 'ビル1階' },
+  { id: 'M', x: 26, y: 16, w: 10, h: 2, name: '長い直線通路' },
+  { id: 'O', x: 20, y: 20, w: 16, h: 9, name: '広い庭' },
 ];
 
 // 通路の矩形定義(部屋同士をつなぐ)
@@ -591,6 +632,35 @@ const CORRIDORS = [
   { x: 21, y: 6, w: 2, h: 3 },  // I - J
   { x: 19, y: 10, w: 1, h: 2 }, // J - F
   { x: 10, y: 19, w: 2, h: 1 }, // H - K
+  // --- 大規模拡張エリアへの接続 ---
+  { x: 27, y: 13, w: 2, h: 3 }, // N - M(ビルと直線通路)
+  { x: 28, y: 18, w: 2, h: 2 }, // M - O(直線通路と庭)
+  // --- 裏ルート(ダクト、3本の細い近道) ---
+  { x: 9, y: 5, w: 1, h: 3 },   // duct1: B - E
+  { x: 19, y: 8, w: 1, h: 2 },  // duct2a: F への接続(縦の折れ)
+  { x: 19, y: 8, w: 7, h: 1 },  // duct2b: F - N(横の本線)
+  { x: 17, y: 21, w: 3, h: 1 }, // duct3: K - O
+];
+
+// 高所エリア(2階・階段・ハシゴ・見張り台)の矩形定義。
+// MAP_GRID上は通常の通路と同じく歩行可能として彫るが、壁の自動生成の対象からは除外し、
+// 高さは別途HEIGHT_ZONESで管理する(見た目・カメラの高さに反映される)。
+const ELEVATED_CORRIDORS = [
+  { x: 26, y: 4, w: 2, h: 3 },  // ビルの階段
+  { x: 26, y: 7, w: 2, h: 1 },  // 階段とビル1階(N)の間の踊り場
+  { x: 25, y: 1, w: 9, h: 3 },  // ビル2階(ベランダ含む)
+  { x: 27, y: 29, w: 1, h: 3 }, // ハシゴ
+  { x: 26, y: 32, w: 3, h: 2 }, // 見張り台の床
+];
+
+// 高さゾーン: 上記ELEVATED_CORRIDORSの各区画に対応する高さの情報。
+// type: 'ramp'(区画内で高さが連続的に変化する。階段・ハシゴ) / 'flat'(一定の高さ。2階の床・見張り台)
+const HEIGHT_ZONES = [
+  { type: 'ramp', gx0: 26, gy0: 4, gx1: 27, gy1: 6, h0: 3.2, h1: 0 },     // 階段(上=ビル2階側 → 下=1階側)
+  { type: 'flat', gx0: 26, gy0: 7, gx1: 27, gy1: 7, height: 0 },          // 踊り場(1階と同じ高さ)
+  { type: 'flat', gx0: 25, gy0: 1, gx1: 33, gy1: 3, height: 3.2 },        // ビル2階・ベランダ
+  { type: 'ramp', gx0: 27, gy0: 29, gx1: 27, gy1: 31, h0: 0, h1: 2.0 },   // ハシゴ(下=庭側 → 上=見張り台側)
+  { type: 'flat', gx0: 26, gy0: 32, gx1: 28, gy1: 33, height: 2.0 },      // 見張り台
 ];
 
 // 部屋内の遮蔽物(クレート)。視線と移動を遮る戦術的な障害物。
@@ -605,11 +675,20 @@ const OBSTACLE_CELLS = [
   { gx: 2, gy: 16 }, { gx: 4, gy: 17 },    // 南西の部屋(G)
   { gx: 16, gy: 10 }, { gx: 17, gy: 13 },  // 東南の部屋(F)
   { gx: 21, gy: 2 },                       // 東の増築室(I)
+  { gx: 30, gy: 16 }, { gx: 32, gy: 17 },  // 長い直線通路(M、遮蔽物で一直線の撃ち合いを少し崩す)
+  // 広い庭(O)の障害物
+  { gx: 22, gy: 22 }, { gx: 30, gy: 22 }, { gx: 23, gy: 27 },
+  { gx: 32, gy: 26 }, { gx: 27, gy: 22 }, { gx: 33, gy: 24 },
 ];
 
 // トラック(景観・遮蔽物)を配置するグリッドの区画。ここは通行不可にする
 const TRUCK_FOOTPRINT_CELLS = [
   { gx: 10, gy: 11 }, { gx: 11, gy: 11 },
+];
+
+// 車(景観・遮蔽物、庭に設置)を配置するグリッドの区画
+const CAR_FOOTPRINT_CELLS = [
+  { gx: 24, gy: 24 }, { gx: 25, gy: 24 },
 ];
 
 function buildGrid() {
@@ -632,14 +711,58 @@ function buildGrid() {
   };
   ROOMS.forEach(r => carve(r.x, r.y, r.w, r.h));
   CORRIDORS.forEach(c => carve(c.x, c.y, c.w, c.h));
+  ELEVATED_CORRIDORS.forEach(c => carve(c.x, c.y, c.w, c.h));
   return grid;
 }
 
 const MAP_GRID = buildGrid();
 
+// 高所エリアに属するセルの集合(壁の自動生成から除外するために使う。game.js側で参照)
+const ELEVATED_CELLS = new Set();
+ELEVATED_CORRIDORS.forEach((c) => {
+  for (let iy = c.y; iy < c.y + c.h; iy++) {
+    for (let ix = c.x; ix < c.x + c.w; ix++) {
+      ELEVATED_CELLS.add(`${ix},${iy}`);
+    }
+  }
+});
+
+// 指定したグリッド座標(小数可)の地面の高さを求める(階段・ハシゴは連続的に、平らな場所は一定)
+function getGroundHeightAtGrid(gx, gy) {
+  let best = 0;
+  for (const zone of HEIGHT_ZONES) {
+    if (gx < zone.gx0 || gx > zone.gx1 || gy < zone.gy0 || gy > zone.gy1) continue;
+    let h;
+    if (zone.type === 'flat') {
+      h = zone.height;
+    } else {
+      const wSpan = zone.gx1 - zone.gx0;
+      const hSpan = zone.gy1 - zone.gy0;
+      let t;
+      if (wSpan >= hSpan) {
+        t = wSpan === 0 ? 0 : (gx - zone.gx0) / wSpan;
+      } else {
+        t = hSpan === 0 ? 0 : (gy - zone.gy0) / hSpan;
+      }
+      t = Math.max(0, Math.min(1, t));
+      h = zone.h0 + (zone.h1 - zone.h0) * t;
+    }
+    if (h > best) best = h;
+  }
+  return best;
+}
+
+// 指定したワールド座標の地面の高さを求める(カメラ・敵・味方の描画Yに使う)
+function getGroundHeightAt(worldX, worldZ) {
+  const gxf = worldX / CELL_SIZE + GRID_SIZE / 2;
+  const gyf = worldZ / CELL_SIZE + GRID_SIZE / 2;
+  return getGroundHeightAtGrid(gxf, gyf);
+}
+
 // 遮蔽物セルを通行不可にする(構造壁とは別扱い。描画はcrate状にする)
 OBSTACLE_CELLS.forEach((o) => { MAP_GRID[o.gy][o.gx] = 0; });
 TRUCK_FOOTPRINT_CELLS.forEach((o) => { MAP_GRID[o.gy][o.gx] = 0; });
+CAR_FOOTPRINT_CELLS.forEach((o) => { MAP_GRID[o.gy][o.gx] = 0; });
 
 // ドア開口部(部屋と通路が接する境界)を矩形の隣接関係から自動算出する。
 // 各要素: { axis: 'x'|'z', ...境界座標(グリッド単位)..., roomId }
@@ -846,22 +969,18 @@ const SensorSystem = (() => {
   const LOWPASS_ALPHA = 0.12;          // 重力/姿勢成分を推定する低域通過フィルタ係数
 
   // ---- THREE.js を用いた向きのクォータニオン計算(標準的なAR的手法) ----
-  // 校正は「今画面に見えている方向」をそのまま新しい正面(0度)にする、というシンプルな仕組み。
-  // 上下の傾き(ピッチ)・左右の傾き(ロール)は校正の影響を受けず、常にその場の生の値を使う。
-  //
-  // 【重要な注意】このゲームのように端末をほぼ垂直(beta≈90°)に構える姿勢では、
-  // 「体の向き(alpha)」と「手首の傾き(gamma)」が数学的に区別できなくなる(ジンバルロック)。
-  // そのため、正面リセット後に手首の角度が変わると、体を回していなくても正面が動いて見える
-  // ことがある。これはこの姿勢そのものの物理的な限界であり、完全にはソフトウェアで解決できない。
-  // 対策として、3Dベクトル(手首の傾きの影響も含めて素直に計算する)を使い、
-  // 特定の一軸だけを別計算で無理に切り出すようなことはしない。
-  let calibYawOffset = 0; // 正面リセットで設定される、ヨーのオフセット(ラジアン)
+  // 校正は「ゲーム開始時に構えている向き」をそのまま正面(まっすぐ前を見ている状態)にする。
+  // 左右の向き(ヨー)だけでなく、上下の傾き(ピッチ)も校正の対象にする。これにより、
+  // 腕が疲れる完全に垂直な構え方でなくても、自然に楽な角度で構えた状態が「正面」になる。
+  // (以前は正面リセットボタンを押した際に手首の傾きが誤って固定されてしまう問題を避けるため
+  // ピッチを校正対象から外していたが、そのボタン自体を廃止したため、開始時の1回だけ校正される
+  // 今の仕組みでは、ピッチも一緒に校正したほうが自然な構え心地になる)
+  let calibrationInverse = new THREE.Quaternion(); // 校正時の姿勢の逆クォータニオン
   let currentRawQuaternion = new THREE.Quaternion(); // 生のクォータニオン(常に最新)
   let zee = new THREE.Vector3(0, 0, 1);
   let euler = new THREE.Euler();
   let q0 = new THREE.Quaternion();
   let q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)); // -PI/2 around X
-  const worldUp = new THREE.Vector3(0, 1, 0);
 
   function screenOrientationAngle() {
     if (screen.orientation && typeof screen.orientation.angle === 'number') {
@@ -893,15 +1012,6 @@ const SensorSystem = (() => {
     return q;
   }
 
-  // クォータニオンの水平方向の向き(手首の傾きの影響も含めて素直に)求める
-  function computeYawFromQuaternion(q) {
-    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
-    fwd.y = 0;
-    if (fwd.lengthSq() < 1e-6) return 0; // 真上/真下を向いている場合のフォールバック
-    fwd.normalize();
-    return Math.atan2(-fwd.x, -fwd.z);
-  }
-
   // ---- 内部状態 ----
   const state = {
     supported: 'DeviceOrientationEvent' in window && 'DeviceMotionEvent' in window,
@@ -929,9 +1039,8 @@ const SensorSystem = (() => {
   let lpX = 0, lpY = 0, lpZ = 0, lpInit = false;
 
   function updateDerivedState(rawQ) {
-    // ヨーのオフセット(校正で決まる)を、生のクォータニオンに単純に上乗せするだけ。
-    const yawQuat = new THREE.Quaternion().setFromAxisAngle(worldUp, -calibYawOffset);
-    const rel = yawQuat.multiply(rawQ);
+    // 校正時の姿勢を基準にした相対姿勢(ヨー・ピッチ・ロールすべてが校正の対象)
+    const rel = calibrationInverse.clone().multiply(rawQ);
     state.quaternion.copy(rel);
 
     // 表示・参考用にyaw・pitch・rollを抽出(YXZ順、あくまで参考値)
@@ -1065,12 +1174,11 @@ const SensorSystem = (() => {
     return state.permissionGranted;
   }
 
-  // 正面リセット: 今画面に見えている方向を、そのまま新しい正面(ヨー0度)にする。
-  // 上下の傾き(ピッチ)・左右の傾き(ロール)はここでは固定しない(常に生の値を使う)。
+  // 初期校正: ゲーム開始時に構えている向き(上下の傾きも含む)を、そのまま正面(まっすぐ前)にする。
   function calibrate() {
-    calibYawOffset = computeYawFromQuaternion(currentRawQuaternion);
+    calibrationInverse.copy(currentRawQuaternion).invert();
     state.calibrated = true;
-    state.debugLastCalibrateYawDeg = THREE.MathUtils.radToDeg(calibYawOffset);
+    state.debugLastCalibrateYawDeg = 0; // 校正直後は差分0
     // 次のイベントを待たず、この瞬間の姿勢を即座に反映する
     updateDerivedState(currentRawQuaternion);
   }
@@ -1382,58 +1490,165 @@ const WeaponSystem = (() => {
     const def = WEAPON_DEFS[key];
     const group = new THREE.Group();
 
-    const bodyMat = new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.6, metalness: 0.3 });
-    const accentMat = new THREE.MeshStandardMaterial({ color: def.accentColor, roughness: 0.4, metalness: 0.5 });
-    const magMat = new THREE.MeshStandardMaterial({ color: def.magColor, roughness: 0.7, metalness: 0.2 });
+    const bodyMat = new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.55, metalness: 0.35 });
+    const accentMat = new THREE.MeshStandardMaterial({ color: def.accentColor, roughness: 0.35, metalness: 0.6 });
+    const magMat = new THREE.MeshStandardMaterial({ color: def.magColor, roughness: 0.65, metalness: 0.25 });
+    const metalMat = new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.3, metalness: 0.75 });
+    const rubberMat = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.9, metalness: 0.05 });
 
     // レシーバー(本体)
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.55), bodyMat);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.1, 0.58), bodyMat);
     body.position.set(0, 0, -0.2);
     group.add(body);
 
+    // アッパー/ロアーの分割ライン(細い溝)
+    const splitLine = new THREE.Mesh(new THREE.BoxGeometry(0.098, 0.006, 0.5), metalMat);
+    splitLine.position.set(0, -0.02, -0.2);
+    group.add(splitLine);
+
+    // 排莢口の膨らみ
+    const ejectPort = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.05, 0.12), accentMat);
+    ejectPort.position.set(0.01, 0.02, -0.05);
+    group.add(ejectPort);
+
+    // トップレイル(上部にマウントレイルの溝を模した凹凸)
+    const topRail = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.02, 0.42), accentMat);
+    topRail.position.set(0, 0.055, -0.22);
+    group.add(topRail);
+    for (let i = 0; i < 7; i++) {
+      const notch = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.012, 0.02), metalMat);
+      notch.position.set(0, 0.066, -0.05 - i * 0.055);
+      group.add(notch);
+    }
+
+    // ドットサイト(簡易的な光学サイト)
+    const opticBase = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.03, 0.1), metalMat);
+    opticBase.position.set(0, 0.09, -0.08);
+    group.add(opticBase);
+    const opticRingFront = new THREE.Mesh(new THREE.TorusGeometry(0.028, 0.008, 6, 10), metalMat);
+    opticRingFront.rotation.y = Math.PI / 2;
+    opticRingFront.position.set(0, 0.12, -0.13);
+    group.add(opticRingFront);
+    const opticRingRear = new THREE.Mesh(new THREE.TorusGeometry(0.028, 0.008, 6, 10), metalMat);
+    opticRingRear.rotation.y = Math.PI / 2;
+    opticRingRear.position.set(0, 0.12, -0.02);
+    group.add(opticRingRear);
+    const opticLensFront = new THREE.Mesh(new THREE.CircleGeometry(0.024, 10), new THREE.MeshStandardMaterial({
+      color: 0x2a5a3a, emissive: 0x0a2a1a, roughness: 0.2, metalness: 0.8,
+    }));
+    opticLensFront.rotation.y = Math.PI / 2;
+    opticLensFront.position.set(0, 0.12, -0.13);
+    group.add(opticLensFront);
+
+    // チャージングハンドル(上部後方の突起)
+    const chargingHandle = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.025, 0.06), metalMat);
+    chargingHandle.position.set(0, 0.045, 0.06);
+    group.add(chargingHandle);
+
     // 銃身
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.4, 8), accentMat);
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.017, 0.42, 8), accentMat);
     barrel.rotation.x = Math.PI / 2;
-    barrel.position.set(0, 0.01, -0.65);
+    barrel.position.set(0, 0.01, -0.66);
     group.add(barrel);
 
-    // ハンドガード
-    const handguard = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.07, 0.28), accentMat);
+    // マズルブレーキ(銃口先端、段差のある形状)
+    const muzzleBrake1 = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.05, 8), metalMat);
+    muzzleBrake1.rotation.x = Math.PI / 2;
+    muzzleBrake1.position.set(0, 0.01, -0.86);
+    group.add(muzzleBrake1);
+    const muzzleBrake2 = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.024, 0.03, 8), metalMat);
+    muzzleBrake2.rotation.x = Math.PI / 2;
+    muzzleBrake2.position.set(0, 0.01, -0.9);
+    group.add(muzzleBrake2);
+
+    // ハンドガード(縦の放熱スリット付き)
+    const handguard = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.075, 0.3), accentMat);
     handguard.position.set(0, -0.005, -0.5);
     group.add(handguard);
+    for (let i = 0; i < 4; i++) {
+      const slit = new THREE.Mesh(new THREE.BoxGeometry(0.078, 0.012, 0.02), metalMat);
+      slit.position.set(0, 0.01, -0.4 - i * 0.055);
+      group.add(slit);
+    }
 
-    // グリップ
-    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.16, 0.05), bodyMat);
-    grip.position.set(0, -0.13, -0.05);
-    grip.rotation.x = 0.25;
+    // フロントグリップ(ハンドガード下の縦グリップ)
+    const foreGrip = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.022, 0.09, 8), rubberMat);
+    foreGrip.position.set(0, -0.075, -0.56);
+    group.add(foreGrip);
+
+    // トリガーガード
+    const triggerGuardBottom = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.012, 0.09), metalMat);
+    triggerGuardBottom.position.set(0, -0.095, -0.1);
+    group.add(triggerGuardBottom);
+    const triggerGuardFront = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.05, 0.012), metalMat);
+    triggerGuardFront.position.set(0, -0.07, -0.14);
+    group.add(triggerGuardFront);
+    const trigger = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.035, 0.012), metalMat);
+    trigger.position.set(0, -0.055, -0.09);
+    trigger.rotation.x = 0.2;
+    group.add(trigger);
+
+    // セレクターレバー(側面の小さなレバー)
+    const selector = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.018, 0.03), metalMat);
+    selector.position.set(0.05, -0.02, -0.08);
+    group.add(selector);
+
+    // グリップ(滑り止めの筋を追加)
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.17, 0.055), rubberMat);
+    grip.position.set(0, -0.14, -0.03);
+    grip.rotation.x = 0.22;
     group.add(grip);
+    for (let i = 0; i < 4; i++) {
+      const groove = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.01, 0.058), metalMat);
+      groove.position.set(0, -0.1 - i * 0.028, -0.02 - i * 0.006);
+      groove.rotation.x = 0.22;
+      group.add(groove);
+    }
 
-    // マガジン(AKは湾曲、M4はまっすぐ = 傾きで表現)
-    const mag = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.22, 0.06), magMat);
-    mag.position.set(0, -0.2, -0.18);
-    mag.rotation.x = def.stockStraight ? 0.05 : 0.28;
+    // マガジン(AKは湾曲、M4はまっすぐ = 傾きで表現。2段構成で厚みを出す)
+    const mag = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.24, 0.065), magMat);
+    mag.position.set(0, -0.21, -0.17);
+    mag.rotation.x = def.stockStraight ? 0.05 : 0.3;
     group.add(mag);
+    const magBase = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.02, 0.075), metalMat);
+    magBase.position.set(0, def.stockStraight ? -0.325 : -0.315, def.stockStraight ? -0.175 : -0.09);
+    magBase.rotation.x = def.stockStraight ? 0.05 : 0.3;
+    group.add(magBase);
 
     // ストック
-    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.08, 0.22), bodyMat);
-    stock.position.set(0, def.stockStraight ? 0 : -0.02, 0.15);
+    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.09, 0.24), bodyMat);
+    stock.position.set(0, def.stockStraight ? 0 : -0.02, 0.16);
     group.add(stock);
+    // ストックパッド
+    const stockPad = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.1, 0.02), rubberMat);
+    stockPad.position.set(0, def.stockStraight ? 0 : -0.02, 0.28);
+    group.add(stockPad);
+    // スリングマウント(ストック後端の小さな輪)
+    const slingMount = new THREE.Mesh(new THREE.TorusGeometry(0.014, 0.004, 6, 8), metalMat);
+    slingMount.position.set(0, def.stockStraight ? -0.03 : -0.05, 0.275);
+    group.add(slingMount);
 
-    // フロントサイト
-    const sight = new THREE.Mesh(new THREE.BoxGeometry(0.015, 0.05, 0.015), accentMat);
-    sight.position.set(0, 0.05, -0.82);
+    // フロントサイト(ポスト+フード)
+    const sight = new THREE.Mesh(new THREE.BoxGeometry(0.015, 0.055, 0.015), accentMat);
+    sight.position.set(0, 0.06, -0.83);
     group.add(sight);
-
-    // リアサイト
-    const rearSight = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.03, 0.02), accentMat);
-    rearSight.position.set(0, 0.055, -0.05);
-    group.add(rearSight);
+    const sightHoodL = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.05, 0.008), metalMat);
+    sightHoodL.position.set(-0.02, 0.06, -0.83);
+    group.add(sightHoodL);
+    const sightHoodR = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.05, 0.008), metalMat);
+    sightHoodR.position.set(0.02, 0.06, -0.83);
+    group.add(sightHoodR);
 
     if (!def.stockStraight) {
       // AK風: 三角形のウッドストック風パーツを追加
       const woodStock = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.1, 0.12), magMat);
       woodStock.position.set(0, -0.02, 0.28);
       group.add(woodStock);
+      // AK風: ガスチューブ(銃身上の細い筒)
+      const gasTube = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.24, 8), metalMat);
+      gasTube.rotation.x = Math.PI / 2;
+      gasTube.position.set(0, 0.04, -0.55);
+      group.add(gasTube);
     }
 
     // マズルフラッシュ(発射の瞬間だけ光る火花)。銃口(銃身の先端)に配置。
@@ -1449,7 +1664,7 @@ const WeaponSystem = (() => {
       spike.rotation.z = (Math.PI / 2) * i + Math.PI / 4;
       flashGroup.add(spike);
     }
-    flashGroup.position.set(0, 0.01, -0.86);
+    flashGroup.position.set(0, 0.01, -0.93);
     flashGroup.scale.set(0.01, 0.01, 0.01);
     group.add(flashGroup);
     group.userData.flashGroup = flashGroup;
@@ -1792,7 +2007,7 @@ const EnemyManager = (() => {
     };
     const world = gridToWorld(spawnDef.gx, spawnDef.gy);
     const mesh = buildMesh(def);
-    mesh.position.set(world.x, 0, world.z);
+    mesh.position.set(world.x, getGroundHeightAt(world.x, world.z), world.z);
     scene.add(mesh);
 
     const enemy = {
@@ -1984,7 +2199,7 @@ const EnemyManager = (() => {
       // 進行方向を向かせる
       enemy.mesh.rotation.y = Math.atan2(dir.x, dir.z);
     }
-    enemy.mesh.position.set(enemy.pos.x, 0, enemy.pos.z);
+    enemy.mesh.position.set(enemy.pos.x, getGroundHeightAt(enemy.pos.x, enemy.pos.z), enemy.pos.z);
     animateLegs(enemy, dt, true);
   }
 
@@ -2249,7 +2464,7 @@ const AllyManager = (() => {
     const def = ALLY_TYPES[spawnDef.type];
     const world = gridToWorld(spawnDef.gx, spawnDef.gy);
     const mesh = buildMesh(def);
-    mesh.position.set(world.x, 0, world.z);
+    mesh.position.set(world.x, getGroundHeightAt(world.x, world.z), world.z);
     scene.add(mesh);
 
     const ally = {
@@ -2328,7 +2543,7 @@ const AllyManager = (() => {
       ally.pos.addScaledVector(dir, step);
       ally.mesh.rotation.y = Math.atan2(dir.x, dir.z);
     }
-    ally.mesh.position.set(ally.pos.x, 0, ally.pos.z);
+    ally.mesh.position.set(ally.pos.x, getGroundHeightAt(ally.pos.x, ally.pos.z), ally.pos.z);
     animateLegs(ally, dt, true);
   }
 
@@ -2689,7 +2904,7 @@ const PvpSystem = (() => {
     if (!msg || !msg.t) return;
     switch (msg.t) {
       case 'state':
-        targetPos.set(msg.x, 0, msg.z);
+        targetPos.set(msg.x, getGroundHeightAt(msg.x, msg.z), msg.z);
         targetYaw = msg.yaw;
         if (msg.alive !== remoteAlive) {
           remoteAlive = msg.alive;
@@ -2810,6 +3025,8 @@ const PvpSystem = (() => {
     enemyCount: document.getElementById('enemy-count'),
     minimapCanvas: document.getElementById('minimap'),
     damageFlash: document.getElementById('damage-flash'),
+    crosshair: document.getElementById('crosshair'),
+    hitMarker: document.getElementById('hit-marker'),
     killMessage: document.getElementById('kill-message'),
     weaponCards: document.querySelectorAll('.weapon-card'),
     diffCards: document.querySelectorAll('.diff-card'),
@@ -2936,9 +3153,9 @@ const PvpSystem = (() => {
   function buildScene() {
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0xbcd6e8);
-    scene.fog = new THREE.Fog(0xcfe0d8, 20, 55);
+    scene.fog = new THREE.Fog(0xcfe0d8, 25, 95);
 
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 100);
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 170);
     camera.position.set(0, EYE_HEIGHT, 0);
 
     renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -2966,6 +3183,10 @@ const PvpSystem = (() => {
     buildColumns();
     buildCrates();
     buildTruck();
+    buildCar();
+    buildElevatedStructures();
+    buildLadderTower();
+    buildDuctProps();
     buildMinimapStatic();
     WeaponSystem.init(camera);
 
@@ -3122,6 +3343,7 @@ const PvpSystem = (() => {
   function buildMap() {
     const obstacleSet = new Set(OBSTACLE_CELLS.map(o => `${o.gx},${o.gy}`));
     const truckSet = new Set(TRUCK_FOOTPRINT_CELLS.map(o => `${o.gx},${o.gy}`));
+    const carSet = new Set(CAR_FOOTPRINT_CELLS.map(o => `${o.gx},${o.gy}`));
 
     const floorTex = buildFloorTexture();
     floorTex.repeat.set(GRID_SIZE, GRID_SIZE);
@@ -3137,17 +3359,26 @@ const PvpSystem = (() => {
     const wallMat = new THREE.MeshStandardMaterial({ map: wallTex, roughness: 0.8, metalness: 0.15 });
     wallGroup = new THREE.Group();
 
+    // 高所エリア(階段・2階・ハシゴ等)専用の判定。地上レベルの壁を誤って生成しないための除外に使う
+    const isElevated = (gx, gy) => ELEVATED_CELLS.has(`${gx},${gy}`);
+
     for (let gy = 0; gy < GRID_SIZE; gy++) {
       for (let gx = 0; gx < GRID_SIZE; gx++) {
         if (MAP_GRID[gy][gx] === 0) {
-          // 遮蔽物(クレート)・トラック区画は構造壁として描画しない(別途専用の見た目で描画)
-          if (obstacleSet.has(`${gx},${gy}`) || truckSet.has(`${gx},${gy}`)) continue;
-          // 完全に孤立した壁(周囲に床が無い)は描画を省略して負荷を減らす
+          // 遮蔽物(クレート)・トラック・車の区画は構造壁として描画しない(別途専用の見た目で描画)
+          if (obstacleSet.has(`${gx},${gy}`) || truckSet.has(`${gx},${gy}`) || carSet.has(`${gx},${gy}`)) continue;
+          // 完全に孤立した壁(周囲に床が無い)は描画を省略して負荷を減らす。
+          // 高所エリアに隣接しているだけの場合も除外する(地上レベルの壁は不要なため。
+          // 高所エリアの縁取りは別途buildElevatedStructures()で高さに応じたものを描画する)
           const hasAdjacentFloor =
-            isWalkable(gx + 1, gy) || isWalkable(gx - 1, gy) ||
-            isWalkable(gx, gy + 1) || isWalkable(gx, gy - 1) ||
-            isWalkable(gx + 1, gy + 1) || isWalkable(gx - 1, gy - 1) ||
-            isWalkable(gx + 1, gy - 1) || isWalkable(gx - 1, gy + 1);
+            (isWalkable(gx + 1, gy) && !isElevated(gx + 1, gy)) ||
+            (isWalkable(gx - 1, gy) && !isElevated(gx - 1, gy)) ||
+            (isWalkable(gx, gy + 1) && !isElevated(gx, gy + 1)) ||
+            (isWalkable(gx, gy - 1) && !isElevated(gx, gy - 1)) ||
+            (isWalkable(gx + 1, gy + 1) && !isElevated(gx + 1, gy + 1)) ||
+            (isWalkable(gx - 1, gy - 1) && !isElevated(gx - 1, gy - 1)) ||
+            (isWalkable(gx + 1, gy - 1) && !isElevated(gx + 1, gy - 1)) ||
+            (isWalkable(gx - 1, gy + 1) && !isElevated(gx - 1, gy + 1));
           if (!hasAdjacentFloor) continue;
           const w = gridToWorld(gx, gy);
           const mesh = new THREE.Mesh(wallGeo, wallMat);
@@ -3240,13 +3471,13 @@ const PvpSystem = (() => {
 
   // ---- 空(スカイドーム): 屋外基地の背景。上は青空、地平線に近いほど白っぽくかすむ ----
   function buildSky() {
-    const skyGeo = new THREE.SphereGeometry(90, 24, 16);
+    const skyGeo = new THREE.SphereGeometry(150, 24, 16);
     const colors = [];
     const pos = skyGeo.attributes.position;
     const topColor = new THREE.Color(0x6fa8dc);
     const bottomColor = new THREE.Color(0xe8ecdf);
     for (let i = 0; i < pos.count; i++) {
-      const y = pos.getY(i) / 90; // -1(下)〜1(上)
+      const y = pos.getY(i) / 150; // -1(下)〜1(上)
       const t = THREE.MathUtils.clamp(y * 0.7 + 0.35, 0, 1);
       const c = topColor.clone().lerp(bottomColor, 1 - t);
       colors.push(c.r, c.g, c.b);
@@ -3311,6 +3542,220 @@ const PvpSystem = (() => {
     group.position.set(worldX, 0, worldZ);
     group.rotation.y = Math.PI / 2;
     wallGroup.add(group); // 遮蔽物として射撃の遮蔽判定にも使う
+  }
+
+  // ---- 車(景観・遮蔽物): 庭に設置する乗用車 ----
+  function buildCar() {
+    const cx = (CAR_FOOTPRINT_CELLS[0].gx + CAR_FOOTPRINT_CELLS[1].gx) / 2 - GRID_SIZE / 2;
+    const cz = CAR_FOOTPRINT_CELLS[0].gy - GRID_SIZE / 2;
+    const worldX = (cx + 0.5) * CELL_SIZE;
+    const worldZ = (cz + 0.5) * CELL_SIZE;
+
+    const group = new THREE.Group();
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x7a2828, roughness: 0.4, metalness: 0.4 });
+    const glassMat = new THREE.MeshStandardMaterial({ color: 0x2a3038, roughness: 0.2, metalness: 0.6 });
+    const wheelMat = new THREE.MeshStandardMaterial({ color: 0x161616, roughness: 0.8 });
+    const bumperMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.5, metalness: 0.3 });
+
+    // 車体下部
+    const lowerBody = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.5, 3.8), bodyMat);
+    lowerBody.position.set(0, 0.5, 0);
+    group.add(lowerBody);
+    // キャビン(屋根)
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.55, 2.0), bodyMat);
+    cabin.position.set(0, 1.02, -0.1);
+    group.add(cabin);
+    // フロント/リアガラス
+    const windshield = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.4, 0.05), glassMat);
+    windshield.position.set(0, 0.95, 0.9);
+    windshield.rotation.x = -0.35;
+    group.add(windshield);
+    const rearGlass = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.4, 0.05), glassMat);
+    rearGlass.position.set(0, 0.95, -1.1);
+    rearGlass.rotation.x = 0.35;
+    group.add(rearGlass);
+    // バンパー
+    const frontBumper = new THREE.Mesh(new THREE.BoxGeometry(1.75, 0.25, 0.15), bumperMat);
+    frontBumper.position.set(0, 0.35, 1.9);
+    group.add(frontBumper);
+    const rearBumper = new THREE.Mesh(new THREE.BoxGeometry(1.75, 0.25, 0.15), bumperMat);
+    rearBumper.position.set(0, 0.35, -1.9);
+    group.add(rearBumper);
+    // タイヤ
+    [[-0.85, 1.2], [0.85, 1.2], [-0.85, -1.2], [0.85, -1.2]].forEach(([wx, wz]) => {
+      const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.25, 12), wheelMat);
+      wheel.rotation.z = Math.PI / 2;
+      wheel.position.set(wx, 0.32, wz);
+      group.add(wheel);
+    });
+
+    group.position.set(worldX, 0, worldZ);
+    group.rotation.y = 0.15;
+    wallGroup.add(group);
+  }
+
+  // ---- 立体構造(高所エリア)用の共通ヘルパー ----
+  function gridRectWorldBounds(gx0, gy0, gx1, gy1) {
+    const wA = gridToWorld(gx0, gy0);
+    const wB = gridToWorld(gx1, gy1);
+    return {
+      minX: Math.min(wA.x, wB.x) - CELL_SIZE / 2,
+      maxX: Math.max(wA.x, wB.x) + CELL_SIZE / 2,
+      minZ: Math.min(wA.z, wB.z) - CELL_SIZE / 2,
+      maxZ: Math.max(wA.z, wB.z) + CELL_SIZE / 2,
+    };
+  }
+
+  // 2点間を結ぶ手すり・板状のパーツを1本追加する
+  function addRailBox(x1, z1, x2, z2, centerY, height, thickness, mat) {
+    const dx = x2 - x1, dz = z2 - z1;
+    const length = Math.hypot(dx, dz);
+    if (length < 0.05) return;
+    const box = new THREE.Mesh(new THREE.BoxGeometry(length, height, thickness), mat);
+    box.position.set((x1 + x2) / 2, centerY, (z1 + z2) / 2);
+    box.rotation.y = Math.atan2(-dz, dx);
+    wallGroup.add(box);
+  }
+
+  // 階段・ハシゴの踏み板を、高さゾーンの勾配に沿って並べる
+  function buildRampSteps(zone, stepCount, mat) {
+    const b = gridRectWorldBounds(zone.gx0, zone.gy0, zone.gx1, zone.gy1);
+    const alongY = (zone.gy1 - zone.gy0) >= (zone.gx1 - zone.gx0);
+    for (let i = 0; i < stepCount; i++) {
+      const t = (i + 0.5) / stepCount;
+      const h = zone.h0 + (zone.h1 - zone.h0) * t;
+      const step = new THREE.Mesh(
+        alongY
+          ? new THREE.BoxGeometry((b.maxX - b.minX) * 0.92, 0.12, (b.maxZ - b.minZ) / stepCount * 0.85)
+          : new THREE.BoxGeometry((b.maxX - b.minX) / stepCount * 0.85, 0.12, (b.maxZ - b.minZ) * 0.92),
+        mat
+      );
+      if (alongY) {
+        step.position.set((b.minX + b.maxX) / 2, h, b.minZ + (b.maxZ - b.minZ) * t);
+      } else {
+        step.position.set(b.minX + (b.maxX - b.minX) * t, h, (b.minZ + b.maxZ) / 2);
+      }
+      wallGroup.add(step);
+    }
+  }
+
+  // ---- 2階建てのビル(階段・2階の床・ベランダの手すり・支柱) ----
+  function buildElevatedStructures() {
+    const structMat = new THREE.MeshStandardMaterial({ color: 0xcfc9b8, roughness: 0.8 });
+    const railMat = new THREE.MeshStandardMaterial({ color: 0x4a4438, roughness: 0.55, metalness: 0.3 });
+    const pillarMat = new THREE.MeshStandardMaterial({ color: 0x8f8879, roughness: 0.85 });
+    const stepMat = new THREE.MeshStandardMaterial({ color: 0x9a9384, roughness: 0.8 });
+
+    const stairsZone = HEIGHT_ZONES.find(z => z.gx0 === 26 && z.gy0 === 4);
+    const platformZone = HEIGHT_ZONES.find(z => z.type === 'flat' && z.height === 3.2);
+
+    // 2階の床
+    const pb = gridRectWorldBounds(platformZone.gx0, platformZone.gy0, platformZone.gx1, platformZone.gy1);
+    const slab = new THREE.Mesh(
+      new THREE.BoxGeometry(pb.maxX - pb.minX, 0.2, pb.maxZ - pb.minZ),
+      structMat
+    );
+    slab.position.set((pb.minX + pb.maxX) / 2, platformZone.height - 0.1, (pb.minZ + pb.maxZ) / 2);
+    wallGroup.add(slab);
+
+    // 支柱(四隅で2階の床を支える。当たり判定も追加)
+    [[pb.minX + 0.3, pb.minZ + 0.3], [pb.maxX - 0.3, pb.minZ + 0.3],
+     [pb.minX + 0.3, pb.maxZ - 0.3], [pb.maxX - 0.3, pb.maxZ - 0.3]].forEach(([px, pz]) => {
+      const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.24, platformZone.height, 10), pillarMat);
+      pillar.position.set(px, platformZone.height / 2, pz);
+      wallGroup.add(pillar);
+      columnObstacles.push({ x: px, z: pz, radius: 0.24 });
+    });
+
+    // ベランダ・2階の手すり(見た目より低く、覗いて狙撃できる高さ)。階段側は開口部を空ける
+    const railH = 1.1;
+    const railY = platformZone.height + railH / 2;
+    const stairsB = gridRectWorldBounds(stairsZone.gx0, stairsZone.gy0, stairsZone.gx1, stairsZone.gy1);
+    addRailBox(pb.minX, pb.minZ, pb.maxX, pb.minZ, railY, railH, 0.1, railMat); // 北
+    addRailBox(pb.minX, pb.minZ, pb.minX, pb.maxZ, railY, railH, 0.1, railMat); // 西
+    addRailBox(pb.maxX, pb.minZ, pb.maxX, pb.maxZ, railY, railH, 0.1, railMat); // 東
+    addRailBox(pb.minX, pb.maxZ, stairsB.minX, pb.maxZ, railY, railH, 0.1, railMat); // 南(階段の手前まで)
+    addRailBox(stairsB.maxX, pb.maxZ, pb.maxX, pb.maxZ, railY, railH, 0.1, railMat); // 南(階段の先から)
+
+    // 階段の踏み板
+    buildRampSteps(stairsZone, 6, stepMat);
+  }
+
+  // ---- ハシゴを登った先の見張り台(ほどほどの高さ) ----
+  function buildLadderTower() {
+    const railMat = new THREE.MeshStandardMaterial({ color: 0x4a4438, roughness: 0.55, metalness: 0.3 });
+    const deckMat = new THREE.MeshStandardMaterial({ color: 0x8a7a5a, roughness: 0.85 });
+    const rungMat = new THREE.MeshStandardMaterial({ color: 0x3a3a3a, roughness: 0.5, metalness: 0.5 });
+
+    const ladderZone = HEIGHT_ZONES.find(z => z.type === 'ramp' && z.h1 === 2.0);
+    const deckZone = HEIGHT_ZONES.find(z => z.type === 'flat' && z.height === 2.0);
+
+    // 見張り台の床
+    const db = gridRectWorldBounds(deckZone.gx0, deckZone.gy0, deckZone.gx1, deckZone.gy1);
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(db.maxX - db.minX, 0.2, db.maxZ - db.minZ), deckMat);
+    deck.position.set((db.minX + db.maxX) / 2, deckZone.height - 0.1, (db.minZ + db.maxZ) / 2);
+    wallGroup.add(deck);
+
+    // 見張り台を支える柱
+    [[db.minX + 0.25, db.minZ + 0.25], [db.maxX - 0.25, db.minZ + 0.25],
+     [db.minX + 0.25, db.maxZ - 0.25], [db.maxX - 0.25, db.maxZ - 0.25]].forEach(([px, pz]) => {
+      const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.15, deckZone.height, 8), railMat);
+      pillar.position.set(px, deckZone.height / 2, pz);
+      wallGroup.add(pillar);
+      columnObstacles.push({ x: px, z: pz, radius: 0.15 });
+    });
+
+    // 見張り台の手すり(ハシゴ側は開口部を空ける、周りが見渡せるようやや低め)
+    const railH = 0.9;
+    const railY = deckZone.height + railH / 2;
+    const ladderB = gridRectWorldBounds(ladderZone.gx0, ladderZone.gy0, ladderZone.gx1, ladderZone.gy1);
+    addRailBox(db.minX, db.minZ, db.maxX, db.minZ, railY, railH, 0.08, railMat); // 北(ハシゴ反対側)
+    addRailBox(db.minX, db.minZ, db.minX, db.maxZ, railY, railH, 0.08, railMat); // 西
+    addRailBox(db.maxX, db.minZ, db.maxX, db.maxZ, railY, railH, 0.08, railMat); // 東
+    // 南はハシゴの開口部(ladderBの幅ぶんだけ空ける)。残りがあれば埋める
+    if (ladderB.minX - db.minX > 0.1) addRailBox(db.minX, db.maxZ, ladderB.minX, db.maxZ, railY, railH, 0.08, railMat);
+    if (db.maxX - ladderB.maxX > 0.1) addRailBox(ladderB.maxX, db.maxZ, db.maxX, db.maxZ, railY, railH, 0.08, railMat);
+
+    // ハシゴの横の縦レール2本+踏み段(ラング)
+    const ladderCenterX = (ladderB.minX + ladderB.maxX) / 2;
+    [-0.5, 0.5].forEach((side) => {
+      const rail = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.035, 0.035, ladderZone.h1 - ladderZone.h0, 6),
+        rungMat
+      );
+      rail.position.set(ladderCenterX + side * (ladderB.maxX - ladderB.minX) * 0.4, (ladderZone.h0 + ladderZone.h1) / 2, (ladderB.minZ + ladderB.maxZ) / 2);
+      wallGroup.add(rail);
+    });
+    buildRampSteps(ladderZone, 7, rungMat);
+  }
+
+  // ---- 裏ルート(ダクト)の演出: 低い天板+リブでトンネルらしさを出す ----
+  function buildDuctProps() {
+    const ductMat = new THREE.MeshStandardMaterial({ color: 0x6a7278, roughness: 0.5, metalness: 0.6 });
+    const ductH = 2.1; // 屈まないと通れないような、やや低い天井
+    const ductCells = [
+      { x: 9, y: 5, w: 1, h: 3 },
+      { x: 19, y: 8, w: 1, h: 2 },
+      { x: 19, y: 8, w: 7, h: 1 },
+      { x: 17, y: 21, w: 3, h: 1 },
+    ];
+    ductCells.forEach((rect) => {
+      for (let iy = rect.y; iy < rect.y + rect.h; iy++) {
+        for (let ix = rect.x; ix < rect.x + rect.w; ix++) {
+          const w = gridToWorld(ix, iy);
+          const lid = new THREE.Mesh(new THREE.BoxGeometry(CELL_SIZE * 0.98, 0.08, CELL_SIZE * 0.98), ductMat);
+          lid.position.set(w.x, ductH, w.z);
+          wallGroup.add(lid);
+          // リブ(補強のリング)を等間隔に
+          if ((ix + iy) % 2 === 0) {
+            const rib = new THREE.Mesh(new THREE.TorusGeometry(CELL_SIZE * 0.42, 0.04, 6, 12), ductMat);
+            rib.rotation.x = Math.PI / 2;
+            rib.position.set(w.x, ductH - 0.6, w.z);
+            wallGroup.add(rib);
+          }
+        }
+      }
+    });
   }
 
   // ---- 衝突判定つき移動 ----
@@ -3439,8 +3884,10 @@ const PvpSystem = (() => {
       // 対戦モード: 相手プレイヤーに命中を報告する(ダメージの適用は相手側が行う)
       PvpSystem.reportHit(WeaponSystem.getDamage(), pvpHit.isHeadshot);
       showKillMessage(pvpHit.isHeadshot ? 'ヘッドショット!' : 'ヒット!', pvpHit.isHeadshot);
+      showHitMarker(pvpHit.isHeadshot);
     } else if (hit) {
       EnemyManager.damageEnemy(hit.enemy, WeaponSystem.getDamage(), hit.isHeadshot);
+      showHitMarker(hit.isHeadshot);
     }
   }
 
@@ -3483,6 +3930,7 @@ const PvpSystem = (() => {
     el.damageFlash.classList.remove('active');
     void el.damageFlash.offsetWidth; // reflow でアニメーション再トリガー
     el.damageFlash.classList.add('active');
+    showCrosshairHitShake();
     if (playerHP <= 0) gameOver();
   }
 
@@ -3492,6 +3940,21 @@ const PvpSystem = (() => {
     void el.killMessage.offsetWidth; // reflow でアニメーション再トリガー
     if (isHeadshot) el.killMessage.classList.add('headshot');
     el.killMessage.classList.add('show');
+  }
+
+  // 自分の弾が相手(敵/対戦相手)に当たった瞬間のヒットマーカー
+  function showHitMarker(isHeadshot) {
+    el.hitMarker.classList.remove('show', 'headshot');
+    void el.hitMarker.offsetWidth; // reflow でアニメーション再トリガー
+    if (isHeadshot) el.hitMarker.classList.add('headshot');
+    el.hitMarker.classList.add('show');
+  }
+
+  // 被弾した瞬間、クロスヘアが一瞬上にずれてから戻る演出
+  function showCrosshairHitShake() {
+    el.crosshair.classList.remove('hit-shake');
+    void el.crosshair.offsetWidth; // reflow でアニメーション再トリガー
+    el.crosshair.classList.add('hit-shake');
   }
 
   function onEnemyKilled(enemy, isHeadshot) {
@@ -3617,7 +4080,7 @@ const PvpSystem = (() => {
     // プレイヤー状態リセット
     const startWorld = gridToWorld(PLAYER_START.gx, PLAYER_START.gy);
     playerPos.set(startWorld.x, 0, startWorld.z);
-    camera.position.set(playerPos.x, EYE_HEIGHT, playerPos.z);
+    camera.position.set(playerPos.x, EYE_HEIGHT + getGroundHeightAt(playerPos.x, playerPos.z), playerPos.z);
     playerHP = PLAYER_MAX_HP;
     updateHpHud();
 
@@ -3767,7 +4230,7 @@ const PvpSystem = (() => {
     const spawnGrid = isHostFlag ? PVP_SPAWN_HOST : PVP_SPAWN_GUEST;
     const startWorld = gridToWorld(spawnGrid.gx, spawnGrid.gy);
     playerPos.set(startWorld.x, 0, startWorld.z);
-    camera.position.set(playerPos.x, EYE_HEIGHT, playerPos.z);
+    camera.position.set(playerPos.x, EYE_HEIGHT + getGroundHeightAt(playerPos.x, playerPos.z), playerPos.z);
     playerHP = PLAYER_MAX_HP;
     updateHpHud();
 
@@ -3814,6 +4277,7 @@ const PvpSystem = (() => {
     el.damageFlash.classList.remove('active');
     void el.damageFlash.offsetWidth;
     el.damageFlash.classList.add('active');
+    showCrosshairHitShake();
     if (playerHP <= 0) pvpDie();
   }
 
@@ -3900,7 +4364,7 @@ const PvpSystem = (() => {
         const len = Math.hypot(moveX, moveZ);
         movePlayer((moveX / len) * speedBudget * dt, (moveZ / len) * speedBudget * dt);
       }
-      camera.position.set(playerPos.x, EYE_HEIGHT, playerPos.z);
+      camera.position.set(playerPos.x, EYE_HEIGHT + getGroundHeightAt(playerPos.x, playerPos.z), playerPos.z);
 
       // 足踏みが確定するたびに足音を鳴らす
       if (SensorSystem.state.footstepCount !== lastFootstepCount) {
@@ -3929,7 +4393,7 @@ const PvpSystem = (() => {
             const spawnGrid = pvpIsHost ? PVP_SPAWN_HOST : PVP_SPAWN_GUEST;
             const w = gridToWorld(spawnGrid.gx, spawnGrid.gy);
             playerPos.set(w.x, 0, w.z);
-            camera.position.set(playerPos.x, EYE_HEIGHT, playerPos.z);
+            camera.position.set(playerPos.x, EYE_HEIGHT + getGroundHeightAt(playerPos.x, playerPos.z), playerPos.z);
             playerHP = PLAYER_MAX_HP;
             updateHpHud();
           }
