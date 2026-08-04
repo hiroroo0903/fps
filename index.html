@@ -1473,6 +1473,7 @@ const SensorSystem = (() => {
       devicePitchDeg: 0,  // 端末そのものの傾き (度)
       usingLinearAcc: false,
       gyroActive: false,
+      sensorIdleMs: 0,
     },
   };
 
@@ -1517,6 +1518,7 @@ const SensorSystem = (() => {
   function handleOrientation(event) {
     if (event.beta === null || event.gamma === null) return;
     state.hasReceivedOrientation = true;
+    lastOrientEventTime = performance.now();
 
     const beta = THREE.MathUtils.degToRad(event.beta);
     const gamma = THREE.MathUtils.degToRad(event.gamma);
@@ -1569,6 +1571,7 @@ const SensorSystem = (() => {
   function handleMotion(event) {
     const now = performance.now();
     state.hasReceivedMotion = true;
+    lastMotionEventTime = now;
 
     // ---- 1. ヨーの積分 ----
     const rot = event.rotationRate;
@@ -1671,6 +1674,43 @@ const SensorSystem = (() => {
     }
   }
 
+  // iOSではカメラ(getUserMedia)を使った後などに、
+  // deviceorientation / devicemotion が届かなくなることがある。
+  // 届いた時刻を覚えておき、途切れていたら購読し直せるようにする。
+  let lastMotionEventTime = 0;
+  let lastOrientEventTime = 0;
+
+  function attachSensorListeners() {
+    // 同じ関数を渡す限り重複登録はされないが、
+    // 一度外してから付け直すことで確実に購読をやり直す
+    window.removeEventListener('deviceorientation', handleOrientation);
+    window.removeEventListener('devicemotion', handleMotion);
+    window.addEventListener('deviceorientation', handleOrientation);
+    window.addEventListener('devicemotion', handleMotion);
+  }
+
+  // センサーが生きているか確認し、止まっていたら復旧を試みる。
+  // 戻り値: 復旧処理を行ったか
+  function ensureRunning() {
+    if (!state.permissionGranted) return false;
+    // そもそもセンサーが無い端末(PCなど)では監視しない。
+    // 一度もイベントが来ていない状態で復旧を繰り返すと、視点が延々リセットされてしまう。
+    if (!state.hasReceivedMotion || !state.hasReceivedOrientation) return false;
+    const now = performance.now();
+    const idle = Math.min(now - lastMotionEventTime, now - lastOrientEventTime);
+    state.debug.sensorIdleMs = Math.round(idle);
+    if (idle < 1500) return false;
+    attachSensorListeners();
+    // フィルタもリセットしておく(止まっている間の古い値を引きずらないため)
+    accInit = false;
+    stepArmed = true;
+    stepStreak = 0;
+    curPeak = 0;
+    state.isRunning = false;
+    state.runIntensity = 0;
+    return true;
+  }
+
   async function requestPermission() {
     if (!state.supported) return false;
     try {
@@ -1688,8 +1728,9 @@ const SensorSystem = (() => {
     }
 
     if (state.permissionGranted) {
-      window.addEventListener('deviceorientation', handleOrientation);
-      window.addEventListener('devicemotion', handleMotion);
+      attachSensorListeners();
+      lastMotionEventTime = performance.now();
+      lastOrientEventTime = performance.now();
     }
     return state.permissionGranted;
   }
@@ -1742,6 +1783,7 @@ const SensorSystem = (() => {
     waitForFirstOrientation,
     calibrate,
     recenter: calibrate,
+    ensureRunning,
   };
 })();
 
@@ -3757,7 +3799,8 @@ const PvpSystem = (() => {
   let playerHP = PLAYER_MAX_HP;
   let lastFireTime = 0;
   let wasReloading = false;    // リロード開始の瞬間を検知するためのフラグ
-  let lastFootstepCount = 0;   // 足音再生のトリガー検知用
+  let lastFootstepCount = 0;
+  let sensorWatchdogTimer = 0;   // 足音再生のトリガー検知用
   // 対戦モード(2人)用
   let pvpIsHost = false;
   let pvpRespawning = false;
@@ -5885,6 +5928,12 @@ const PvpSystem = (() => {
     // ホストが選んだステージを相手に伝える(両者で同じマップにする)
     if (pvpIsHost) PvpSystem.sendStage(currentStageId);
 
+    // QRコードの読み取りに使ったカメラを確実に止める。
+    // 付けっぱなしだと描画が重くなるうえ、端末の向き・加速度のイベントが
+    // 止まってしまうことがあり、足踏みでの前進ができなくなる。
+    await stopScanner();
+    SensorSystem.ensureRunning();
+
     await SensorSystem.waitForFirstOrientation();
     SensorSystem.calibrate();
 
@@ -5957,6 +6006,8 @@ const PvpSystem = (() => {
     updateAmmoHud();
 
     PvpSystem.resetMatch();
+    SensorSystem.ensureRunning();
+    SensorSystem.calibrate();
     pvpRespawning = false;
     el.pvpRespawnOverlay.classList.add('hidden');
     el.hudTopRight.classList.add('hidden');
@@ -5996,7 +6047,7 @@ const PvpSystem = (() => {
       `DEV-TILT ${d.devicePitchDeg.toFixed(0)}deg  TURN ${d.turnRateDeg.toFixed(0)}deg/s\n` +
       `STEP sig ${d.stepSignal.toFixed(2).padStart(6)}  peak ${d.stepPeak.toFixed(2).padStart(5)}\n` +
       `RUN ${st.isRunning ? 'YES' : 'no '}  pow ${st.runIntensity.toFixed(2)}  ${d.stepsPerMin}/min\n` +
-      `ACC ${d.usingLinearAcc ? 'linear' : 'incl-gravity'}`;
+      `ACC ${d.usingLinearAcc ? 'linear' : 'incl-gravity'}  idle ${d.sensorIdleMs}ms`;
   }
 
   // ---- メインループ ----
@@ -6008,6 +6059,19 @@ const PvpSystem = (() => {
     if (gameState === 'playing') {
       // 視点: センサーの相対姿勢をそのままカメラに適用
       camera.quaternion.copy(SensorSystem.state.quaternion);
+
+      // センサーのイベントが途切れていないか定期的に確認する。
+      // iOSではカメラ(QRコードの読み取り)を使った後などに、
+      // 端末の向き・加速度のイベントが止まってしまうことがあり、
+      // そうなると足踏みを検出できず前に進めなくなる。
+      sensorWatchdogTimer += dt;
+      if (sensorWatchdogTimer > 1.0) {
+        sensorWatchdogTimer = 0;
+        if (SensorSystem.ensureRunning()) {
+          // 復旧したら、いま構えている向きを正面として取り直す
+          SensorSystem.calibrate();
+        }
+      }
 
       updateSensorDebug();
 
