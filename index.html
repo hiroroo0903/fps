@@ -1183,16 +1183,17 @@ const SensorSystem = (() => {
       if (lastMotionTime !== null) {
         let dt = (now - lastMotionTime) / 1000;
         dt = Math.min(dt, 0.1); // タブ切り替え等での大きな時間差を抑制
-        // rotationRateの各成分(規格上はbeta→ローカルX軸, gamma→ローカルY軸, alpha→ローカルZ軸)を、
-        // このモジュールが使うクォータニオンの基準(q1による90度補正込み)に合わせてq1で共役変換してから使う。
-        // (この変換をせずに素朴にX/Y/Zへ割り当てると、上下と左右の反応が入れ替わってしまうことを
-        // 実機データを模した数値検証で確認し、q1による共役変換で解消することを確認済み)
-        const rawOmega = new THREE.Vector3(
+        // rotationRateの各成分(規格上はbeta→ローカルX軸, gamma→ローカルY軸, alpha→ローカルZ軸)は、
+        // computeDeviceQuaternion()が組み立てる姿勢クォータニオン(q1による90度補正込み)の
+        // ローカル座標系と、変換なしでそのまま一致する。
+        // (以前はここでさらにq1を掛けていたが、これによりY軸とZ軸の成分が入れ替わり符号も反転し、
+        // 「右を向くとカメラが下に動く」「上を向くとカメラが左に動く」という誤動作の原因になっていた。
+        // 単位クォータニオン基準での数値検証により、変換なしが正しいことを確認済み)
+        const omega = new THREE.Vector3(
           THREE.MathUtils.degToRad(rot.beta || 0),
           THREE.MathUtils.degToRad(rot.gamma || 0),
           THREE.MathUtils.degToRad(rot.alpha || 0)
         );
-        const omega = rawOmega.applyQuaternion(q1);
         const angle = omega.length() * dt;
         if (angle > 1e-7) {
           omega.normalize();
